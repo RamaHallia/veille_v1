@@ -27,7 +27,7 @@ export default function AutoIndexer() {
         .from('clients')
         .select('id')
         .eq('user_id', user?.id)
-        .single();
+        .maybeSingle();
 
       if (!clientData) {
         console.log('ℹ️ Aucun client trouvé pour cet utilisateur');

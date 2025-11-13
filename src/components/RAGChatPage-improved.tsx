@@ -71,7 +71,7 @@ export default function RAGChatPageImproved({ onBack }: RAGChatPageProps) {
         .from('clients')
         .select('id')
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
 
       if (!client) return;
 
@@ -101,7 +101,7 @@ export default function RAGChatPageImproved({ onBack }: RAGChatPageProps) {
         .eq('client_id', client.id)
         .order('created_at', { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
 
       setRagStatus({
         totalRapports: totalRapports || 0,

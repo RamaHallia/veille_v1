@@ -143,7 +143,7 @@ export default function AnalyticsDashboard() {
         .from('clients')
         .select('id')
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
 
       if (!clientData) return;
 

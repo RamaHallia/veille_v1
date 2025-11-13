@@ -62,7 +62,7 @@ export default function VeilleHistoryPage() {
         .from('clients')
         .select('id')
         .eq('user_id', user?.id)
-        .single();
+        .maybeSingle();
 
       if (clientError) {
         console.error('❌ Error loading client:', clientError);

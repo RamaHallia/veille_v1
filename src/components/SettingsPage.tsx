@@ -216,7 +216,7 @@ export default function SettingsPage({ onNavigateToDashboard }: SettingsPageProp
           .from('clients')
           .select('email_destinataires, email_cc, updated_at')
           .eq('user_id', user?.id)
-          .single();
+          .maybeSingle();
 
         if (verifyError) {
           console.error('❌ Erreur lors de la vérification:', verifyError);
