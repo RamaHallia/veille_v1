@@ -1,0 +1,487 @@
+{
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "/AgentIA",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          -2640,
+          2896
+        ],
+        "id": "8a95012e-fe2d-4e0b-8d42-8231aec6cf53",
+        "name": "Webhook - Entrée Utilisateur",
+        "webhookId": "cabc2188-ca26-43f8-9b3d-2ae31eee32b6"
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "=SELECT \n  EXISTS(SELECT 1 FROM public.clients WHERE user_id = '{{ $json.body.user_id }}') AS client_exists,\n  (SELECT row_to_json(c) FROM public.clients c WHERE user_id = '{{ $json.body.user_id }}' LIMIT 1) AS client",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.4,
+        "position": [
+          -2432,
+          2896
+        ],
+        "id": "b0502d0b-6481-48f6-bff3-96f5f5845596",
+        "name": "Search Client in Supabase",
+        "alwaysOutputData": true,
+        "credentials": {
+          "postgres": {
+            "id": "qAtIAYuMkQS4QYXV",
+            "name": "Postgres account 5"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "id": "check-exists",
+                "leftValue": "={{ $json.client_exists }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          -2240,
+          2896
+        ],
+        "id": "73589a19-d461-472d-887b-2227a025d156",
+        "name": "Client existe ?"
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "=INSERT INTO public.clients (user_id, status_onboarding, created_at)\nVALUES ('{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}', 'in_progress', NOW())\nRETURNING *",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.4,
+        "position": [
+          -2032,
+          3040
+        ],
+        "id": "0f63fae1-6431-4b7e-b383-6a12ca00cec3",
+        "name": "Create Client",
+        "credentials": {
+          "postgres": {
+            "id": "qAtIAYuMkQS4QYXV",
+            "name": "Postgres account 5"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "=UPDATE public.clients \nSET updated_at = NOW() \nWHERE user_id = '{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}'\nRETURNING *",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.4,
+        "position": [
+          -2032,
+          2736
+        ],
+        "id": "fa4ca3be-03b7-4488-9238-d341539331b5",
+        "name": "Update Timestamp",
+        "credentials": {
+          "postgres": {
+            "id": "qAtIAYuMkQS4QYXV",
+            "name": "Postgres account 5"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "// Normaliser input pour l'agent\nconst inputData = $input.first().json;\nconst body = inputData.body || inputData;\n\nconst message = body.message || \"\";\nconst userId = body.user_id || null;\n\n// Vérifier que user_id existe\nif (!userId) {\n  throw new Error('user_id manquant dans le webhook !');\n}\n\nconsole.log('=== NORMALISATION ===');\nconsole.log('user_id:', userId);\nconsole.log('message:', message);\n\nreturn [{\n  json: {\n    message: {\n      text: message,\n      from: { id: userId },\n      chat: { id: userId }\n    },\n    // Garder aussi les données brutes pour les nodes suivants\n    body: body\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -1840,
+          2896
+        ],
+        "id": "428dfe51-4845-480d-9cc1-0fb684bed96e",
+        "name": "Normaliser Input"
+      },
+      {
+        "parameters": {
+          "model": "grok-4-fast-reasoning",
+          "options": {
+            "maxTokens": 25000
+          }
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+        "typeVersion": 1,
+        "position": [
+          -1728,
+          3088
+        ],
+        "id": "a547d0f7-2d68-4a0b-9f69-74f240a42216",
+        "name": "xAI Grok",
+        "credentials": {
+          "xAiApi": {
+            "id": "xR0cDwxWRWiGZdNG",
+            "name": "xAi account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}",
+          "contextWindowLength": 30
+        },
+        "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+        "typeVersion": 1.3,
+        "position": [
+          -1584,
+          3168
+        ],
+        "id": "9c4dfb98-ce2f-4546-b523-d5cce6d46545",
+        "name": "Memory"
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=Message utilisateur : {{ $('Webhook - Entrée Utilisateur').item.json.body.message }}\n\nUser ID (OBLIGATOIRE) : {{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}\n\n🎯 MISSION : Guider l'utilisateur à travers 10 étapes.\n\nÉTAPES :\n1. Prénom + Email\n2. Secteur\n3. Mots-clés (3-5)\n4. Concurrents (3-10)\n5. Profils LinkedIn\n6. Sources RSS (max 4)\n7. Fréquence\n8. Heure d'envoi\n9. Canaux\n10. Alertes temps réel\n\nRÈGLES :\n- Ton naturel et conversationnel\n- Emojis autorisés\n- Valide chaque étape\n- Permet retours en arrière\n- JSON structuré TOUJOURS\n- TOUJOURS inclure user_id dans config\n- Propose des suggestions pertinentes pour certaines étapes\n\n📋 SYSTÈME DE SUGGESTIONS :\n\nTu DOIS inclure des suggestions pour les étapes suivantes :\n- **Étape 3 : Produits et Services (Mots-clés)** → 5 suggestions adaptées au secteur\n- **Étape 4 : Concurrents** → 5 suggestions d'entreprises concurrentes selon le secteur\n- **Étape 6 : Sources (RSS)** → 4 suggestions de sources d'information selon le secteur\n- **Étape 7 : Fréquence de réception** → 3 suggestions FIXES (quotidienne, hebdomadaire, mensuelle)\n\nPour les autres étapes (1, 2, 5, 8, 9, 10), le champ \"suggestions\" doit être un array vide : `[]`\n\nFormat d'une suggestion :\n```json\n{\n  \"label\": \"Texte affiché\",\n  \"value\": \"valeur_technique\",\n  \"description\": \"Description courte\"\n}\n```\n\nEXEMPLES DE SUGGESTIONS PAR ÉTAPE :\n\n**Étape 3 - Mots-clés (selon secteur E-commerce)** :\n```json\n\"suggestions\": [\n  {\"label\": \"Marketplace\", \"value\": \"marketplace\", \"description\": \"Plateformes multi-vendeurs\"},\n  {\"label\": \"Dropshipping\", \"value\": \"dropshipping\", \"description\": \"Vente sans stock\"},\n  {\"label\": \"Paiement en ligne\", \"value\": \"paiement en ligne\", \"description\": \"Solutions de paiement\"},\n  {\"label\": \"Logistique\", \"value\": \"logistique\", \"description\": \"Supply chain et livraison\"},\n  {\"label\": \"Conversion\", \"value\": \"conversion\", \"description\": \"Optimisation taux de conversion\"}\n]\n```\n\n**Étape 4 - Concurrents (selon secteur E-commerce)** :\n```json\n\"suggestions\": [\n  {\"label\": \"Amazon France\", \"value\": \"Amazon France\", \"description\": \"Leader mondial du e-commerce\"},\n  {\"label\": \"Cdiscount\", \"value\": \"Cdiscount\", \"description\": \"Marketplace française majeure\"},\n  {\"label\": \"Fnac.com\", \"value\": \"Fnac.com\", \"description\": \"E-commerce culturel et tech\"},\n  {\"label\": \"Rakuten\", \"value\": \"Rakuten\", \"description\": \"Marketplace cashback\"},\n  {\"label\": \"Veepee\", \"value\": \"Veepee\", \"description\": \"Ventes privées en ligne\"}\n]\n```\n\n**Étape 6 - Sources RSS (selon secteur E-commerce)** :\n```json\n\"suggestions\": [\n  {\"label\": \"E-commerce Mag\", \"value\": \"https://www.ecommercemag.fr/feed\", \"description\": \"Actualités e-commerce\"},\n  {\"label\": \"Journal du Net\", \"value\": \"https://www.journaldunet.com/ebusiness/rss\", \"description\": \"Business et tech\"},\n  {\"label\": \"FrenchWeb\", \"value\": \"https://www.frenchweb.fr/feed\", \"description\": \"Startups et innovation\"},\n  {\"label\": \"LSA Commerce\", \"value\": \"https://www.lsa-conso.fr/rss\", \"description\": \"Distribution et retail\"}\n]\n```\n\n**Étape 7 - Fréquence (FIXES, toujours les mêmes)** :\n```json\n\"suggestions\": [\n  {\"label\": \"Quotidienne\", \"value\": \"quotidienne\", \"description\": \"Tous les jours ouvrés\"},\n  {\"label\": \"Hebdomadaire\", \"value\": \"hebdomadaire\", \"description\": \"Chaque semaine (lundi)\"},\n  {\"label\": \"Mensuelle\", \"value\": \"mensuelle\", \"description\": \"Début de chaque mois\"}\n]\n```\n\n⚠️ IMPORTANT : Adapte toujours les suggestions (étapes 3, 4, 6) au secteur mentionné par l'utilisateur !\n\nFORMAT RÉPONSE OBLIGATOIRE :\n```json\n{\n  \"message_utilisateur\": \"Ton message ici\",\n  \"suggestions\": [\n    {\"label\": \"Suggestion 1\", \"value\": \"valeur1\", \"description\": \"Description courte\"},\n    {\"label\": \"Suggestion 2\", \"value\": \"valeur2\", \"description\": \"Description courte\"}\n  ],\n  \"config\": {\n    \"user_id\": \"{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}\",\n    \"route\": \"onboarding\",\n    \"status\": \"next_step\",\n    \"etape_actuelle\": 1,\n    \"prenom\": null,\n    \"email\": null,\n    \"secteur\": null,\n    \"Mots clés\": [],\n    \"concurrents\": [],\n    \"profiles_linkedin\": [],\n    \"sources_veille\": [],\n    \"frequence\": null,\n    \"heure_envoi\": null,\n    \"canaux_diffusion\": [],\n    \"alertes_temps_reel\": false,\n    \"etapes_validees\": []\n  }\n}\n```\n\nCRITIQUE :\n- Le champ \"user_id\" DOIT toujours être présent dans config avec la valeur : {{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}\n- Le champ \"suggestions\" DOIT toujours être présent (array vide [] ou avec suggestions selon l'étape)\n\nSi étape 10 validée : route = \"completed\" + status = \"done\"\n\nEXEMPLES DE RÉPONSES :\n\nÉtape 1 (début) :\n```json\n{\n  \"message_utilisateur\": \"Salut ! 😊\\n\\nJe vais t'aider à configurer ta veille concurrentielle.\\n\\nPour commencer, donne-moi ton prénom et ton email.\\n(tu peux tout envoyer d'un coup ou séparément)\",\n  \"suggestions\": [],\n  \"config\": {\n    \"user_id\": \"{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}\",\n    \"route\": \"onboarding\",\n    \"status\": \"next_step\",\n    \"etape_actuelle\": 1,\n    \"etapes_validees\": []\n  }\n}\n```\n\nÉtape 2 (secteur) :\n```json\n{\n  \"message_utilisateur\": \"Parfait Baptiste ! 👍\\n\\nMaintenant, dis-moi dans quel secteur tu bosses ?\",\n  \"suggestions\": [],\n  \"config\": {\n    \"user_id\": \"{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}\",\n    \"route\": \"onboarding\",\n    \"status\": \"next_step\",\n    \"etape_actuelle\": 2,\n    \"prenom\": \"Baptiste\",\n    \"email\": \"test@example.com\",\n    \"etapes_validees\": [1]\n  }\n}\n```\n\nÉtape 3 (mots-clés avec suggestions - exemple secteur Tech) :\n```json\n{\n  \"message_utilisateur\": \"Super ! Tech, c'est passionnant 🚀\\n\\nMaintenant, quels sont les mots-clés ou thématiques que tu veux surveiller ?\\n(Tu peux en choisir 3 à 5 parmi les suggestions ou me donner les tiens)\",\n  \"suggestions\": [\n    {\"label\": \"Intelligence Artificielle\", \"value\": \"intelligence artificielle\", \"description\": \"IA et machine learning\"},\n    {\"label\": \"Cloud Computing\", \"value\": \"cloud computing\", \"description\": \"Services cloud\"},\n    {\"label\": \"Cybersécurité\", \"value\": \"cybersécurité\", \"description\": \"Sécurité informatique\"},\n    {\"label\": \"SaaS\", \"value\": \"saas\", \"description\": \"Software as a Service\"},\n    {\"label\": \"DevOps\", \"value\": \"devops\", \"description\": \"Développement et opérations\"}\n  ],\n  \"config\": {\n    \"user_id\": \"{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}\",\n    \"route\": \"onboarding\",\n    \"status\": \"next_step\",\n    \"etape_actuelle\": 3,\n    \"prenom\": \"Baptiste\",\n    \"email\": \"test@example.com\",\n    \"secteur\": \"Tech\",\n    \"etapes_validees\": [1, 2]\n  }\n}\n```\n\nÉtape 10 (fin) :\n```json\n{\n  \"message_utilisateur\": \"🎉 Configuration terminée !\\n\\nVoici le récap...\",\n  \"suggestions\": [],\n  \"config\": {\n    \"user_id\": \"{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}\",\n    \"route\": \"completed\",\n    \"status\": \"done\",\n    \"etape_actuelle\": 10,\n    \"prenom\": \"Baptiste\",\n    \"email\": \"test@example.com\",\n    \"secteur\": \"Tech\",\n    \"Mots clés\": [\"IA\", \"SaaS\"],\n    \"concurrents\": [\"Google\", \"Microsoft\"],\n    \"profiles_linkedin\": [\"https://linkedin.com/company/google\"],\n    \"sources_veille\": [\"https://techcrunch.com/feed\"],\n    \"frequence\": \"quotidienne\",\n    \"heure_envoi\": \"08:00\",\n    \"canaux_diffusion\": [\"email\"],\n    \"alertes_temps_reel\": false,\n    \"etapes_validees\": [1,2,3,4,5,6,7,8,9,10]\n  }\n}\n```\n\nRAPPEL CRITIQUE : N'oublie JAMAIS d'inclure \"user_id\" dans config à CHAQUE réponse !",
+          "options": {}
+        },
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 2.2,
+        "position": [
+          -1632,
+          2896
+        ],
+        "id": "3e9617ea-ac59-4055-a432-3f17a70f008d",
+        "name": "AI Agent"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Parser réponse agent\nconst raw = $json.output ?? $json.text ?? $json.message ?? $json.answer ?? \n  $json.response ?? $json.result ?? \"\";\n\nlet clean = String(raw).trim();\n\n// Extraire JSON des backticks\nconst fenced = /```json([\\s\\S]*?)```/i.exec(clean) || /```([\\s\\S]*?)```/i.exec(clean);\nif (fenced) clean = fenced[1].trim();\n\nlet parsed = {};\ntry { \n  parsed = JSON.parse(clean); \n} catch (e) { \n  console.error('❌ Parse error:', e);\n  parsed = {}; \n}\n\nlet message_utilisateur = parsed.message_utilisateur || parsed.message || \"\";\nlet config = parsed.config || {};\n\n// ===================== RÉCUPÉRATION USER_ID =====================\n// Essayer de récupérer user_id depuis plusieurs sources possibles\nlet userId = null;\n\n// Source 1 : Déjà dans le config (l'agent l'a inclus)\nif (config.user_id) {\n  userId = config.user_id;\n  console.log('✅ user_id trouvé dans config:', userId);\n}\n\n// Source 2 : Depuis le workflow statique\nif (!userId) {\n  const store = $getWorkflowStaticData(\"global\");\n  userId = store.current_user_id;\n  if (userId) {\n    console.log('✅ user_id trouvé dans store:', userId);\n  }\n}\n\n// Source 3 : Depuis l'input précédent (Normaliser Input)\nif (!userId) {\n  try {\n    const allItems = $input.all();\n    for (const item of allItems) {\n      if (item.json?.body?.user_id) {\n        userId = item.json.body.user_id;\n        console.log('✅ user_id trouvé dans input:', userId);\n        break;\n      }\n    }\n  } catch (e) {\n    console.warn('⚠️ Impossible de lire input:', e.message);\n  }\n}\n\n// Si toujours pas trouvé, ERREUR\nif (!userId) {\n  throw new Error('❌ CRITIQUE : user_id introuvable ! Le webhook doit envoyer user_id dans body.');\n}\n\n// FORCER user_id dans config\nconfig.user_id = userId;\n\n// Sauvegarder dans le store pour les prochains nodes\nconst store = $getWorkflowStaticData(\"global\");\nstore.current_user_id = userId;\n\nconsole.log('✅ user_id ajouté au config:', userId);\n// ===================== FIN USER_ID =====================\n\n// ===================== EMAIL DETECTION =====================\nfunction normaliseForMail(s) {\n  if (!s) return \"\";\n  s = String(s);\n  s = s.replace(/mailto:/gi, \"\");\n  s = s.replace(/\\b(?:at|arobase)\\b/gi, \"@\");\n  s = s.replace(/\\b(?:dot|point)\\b/gi, \".\");\n  return s;\n}\n\nfunction extractEmailFreeText(s) {\n  if (!s) return null;\n  const n = normaliseForMail(s);\n  const m = n.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);\n  return m ? m[0].toLowerCase() : null;\n}\n\nfunction pickEmailStrict(cands) {\n  for (const c of cands) {\n    if (!c) continue;\n    if (typeof c === \"string\") {\n      const e = extractEmailFreeText(c);\n      if (e) return e;\n    }\n  }\n  return null;\n}\n\nconst memKey = `user_email_${userId}`;\nlet email = pickEmailStrict([\n  parsed.email, \n  parsed.user_email, \n  parsed.mail, \n  parsed?.contact?.email,\n  config?.email,\n  store[memKey],\n]);\n\nif (!email) {\n  const probable =\n    /@/.test(raw) || /\\b(?:at|arobase)\\b/i.test(raw) ||\n    /@/.test(clean) || /\\b(?:at|arobase)\\b/i.test(clean);\n\n  if (probable) {\n    email = pickEmailStrict([raw, clean]);\n  }\n}\n\nif (email) {\n  config.email = email;\n  store[memKey] = email;\n} else if (store[memKey]) {\n  config.email = store[memKey];\n}\n// ===================== FIN EMAIL =====================\n\n// ===================== LIMITATION ARRAYS =====================\nconst toArray = v => Array.isArray(v) ? v : (v ? [v] : []);\n\nif (config.sources_veille) {\n  config.sources_veille = toArray(config.sources_veille).slice(0, 4);\n}\n\nif (config[\"Mots clés\"] || config.mots_cles || config.keywords) {\n  const mots = toArray(config[\"Mots clés\"] || config.mots_cles || config.keywords).slice(0, 5);\n  config[\"Mots clés\"] = mots;\n  config.mots_cles = mots;\n}\n\nif (config.concurrents) {\n  config.concurrents = toArray(config.concurrents).slice(0, 10);\n}\n// ===================== FIN LIMITATION =====================\n\nif (!message_utilisateur) {\n  message_utilisateur = \"C'est tout bon 🎯 Ta configuration est enregistrée.\";\n}\n\nconst suggestions = parsed.suggestions || [];\nconsole.log('📋 Suggestions:', suggestions.length, 'trouvées');\n// ===================== FIN SUGGESTIONS =====================\n\nconsole.log('=== CONFIG FINAL ===');\nconsole.log('user_id:', config.user_id);\nconsole.log('email:', config.email);\nconsole.log('route:', config.route);\nconsole.log('status:', config.status);\nconsole.log('suggestions:', suggestions.length);\n\nreturn [{\n  json: {\n    message_utilisateur,\n    suggestions,     // ← AJOUTER CETTE LIGNE !\n    config\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -1376,
+          2912
+        ],
+        "id": "52f9d425-f71b-43ab-b872-b80c3243269d",
+        "name": "Parser Réponse"
+      },
+      {
+        "parameters": {
+          "rules": {
+            "values": [
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 2
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.config.route }}",
+                      "rightValue": "onboarding",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      },
+                      "id": "be765cfa-15cc-4286-af46-47a3462c846a"
+                    }
+                  ],
+                  "combinator": "and"
+                },
+                "renameOutput": true,
+                "outputKey": "onboarding"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 2
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.config.route }}",
+                      "rightValue": "completed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      },
+                      "id": "68d8036d-bf2e-46b2-847e-165262fcb65a"
+                    }
+                  ],
+                  "combinator": "and"
+                },
+                "renameOutput": true,
+                "outputKey": "completed"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3.2,
+        "position": [
+          -1232,
+          2912
+        ],
+        "id": "32f129fa-6c40-40d4-b9e5-df4515623bf4",
+        "name": "Router"
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ { \n  \"message\": $json.message_utilisateur,\n  \"suggestions\": $json.suggestions || [],\n  \"config\": $json.config || {}\n} }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.4,
+        "position": [
+          -1040,
+          2800
+        ],
+        "id": "d43e7436-30b9-472e-95a6-ff15d9cb6202",
+        "name": "Répondre Onboarding"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Préparer données Supabase\nconst cfg = $json.config || {};\n\n// ✅ user_id est maintenant dans config\nconst userId = cfg.user_id;\n\nif (!userId) {\n  throw new Error('❌ user_id manquant dans config ! Vérifier node \"Code\".');\n}\n\nconsole.log('=== PRÉPARATION UPDATE ===');\nconsole.log('user_id:', userId);\nconsole.log('secteur:', cfg.secteur);\n\n// Helper pour échapper apostrophes SQL\nconst escapeSQL = (str) => {\n  if (!str) return null;\n  return String(str).replace(/'/g, \"''\");\n};\n\n// Helpers arrays\nconst toArray = v => Array.isArray(v) ? v : (v ? [v] : []);\nconst toPgArray = arr => {\n  const clean = toArray(arr).map(x => String(x).trim()).filter(Boolean);\n  if (!clean.length) return '{}';\n  return `{${clean.map(v => `\"${v.replace(/\"/g, '\\\\\"').replace(/'/g, \"''\")}\"`).join(',')}}`;\n};\n\nconst prenom = escapeSQL(cfg.prenom);\nconst email = escapeSQL(cfg.email);\nconst whatsapp = escapeSQL(cfg.whatsapp);\nconst secteur = escapeSQL(cfg.secteur);\n\nconst mots_cles = toPgArray(cfg[\"Mots clés\"] || cfg.mots_cles || []);\nconst concurrents = toPgArray(cfg.concurrents || []);\nconst profiles_linkedin = toPgArray(cfg.profiles_linkedin || []);\nconst sources_veille = toPgArray(cfg.sources_veille || []);\nconst canaux_diffusion = toPgArray(cfg.canaux_diffusion || []);\n\nconst frequence = escapeSQL(cfg.frequence);\nconst heure_envoi = escapeSQL(cfg.heure_envoi);\nconst alertes_temps_reel = cfg.alertes_temps_reel === true;\nconst status = cfg.status === 'done' ? 'completed' : 'in_progress';\nconst etapes_validees = toPgArray(cfg.etapes_validees || []);\n\nreturn [{\n  json: {\n    reply: $json.message_utilisateur,\n    user_id: userId,\n    prenom,\n    email,\n    whatsapp,\n    secteur,\n    mots_cles,\n    concurrents,\n    profiles_linkedin,\n    sources_veille,\n    frequence,\n    heure_envoi,\n    canaux_diffusion,\n    alertes_temps_reel,\n    status_onboarding: status,\n    etapes_validees\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -1040,
+          2992
+        ],
+        "id": "a19fd3ed-2262-4247-a73a-4295d4ce008e",
+        "name": "Préparer Update"
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "=UPDATE public.clients SET\n  prenom = {{ $json.prenom ? \"'\" + $json.prenom + \"'\" : \"NULL\" }},\n  email = {{ $json.email ? \"'\" + $json.email + \"'\" : \"NULL\" }},\n  whatsapp = {{ $json.whatsapp ? \"'\" + $json.whatsapp + \"'\" : \"NULL\" }},\n  secteur = {{ $json.secteur ? \"'\" + $json.secteur + \"'\" : \"NULL\" }},\n  mots_cles = '{{ $json.mots_cles }}'::text[],\n  concurrents = '{{ $json.concurrents }}'::text[],\n  profiles_linkedin = '{{ $json.profiles_linkedin }}'::text[],\n  sources_veille = '{{ $json.sources_veille }}'::text[],\n  frequence = {{ $json.frequence ? \"'\" + $json.frequence + \"'\" : \"NULL\" }},\n  heure_envoi = {{ $json.heure_envoi ? \"'\" + $json.heure_envoi + \"'\" : \"NULL\" }},\n  canaux_diffusion = '{{ $json.canaux_diffusion }}'::text[],\n  alertes_temps_reel = {{ $json.alertes_temps_reel }},\n  status_onboarding = '{{ $json.status_onboarding }}',\n  etapes_validees = '{{ $json.etapes_validees }}'::integer[],\n  updated_at = NOW()\nWHERE user_id = '{{ $json.user_id }}'\nRETURNING *",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.4,
+        "position": [
+          -832,
+          2992
+        ],
+        "id": "23c50c65-f108-4153-823f-f1dbcec9406a",
+        "name": "Update Client Final",
+        "credentials": {
+          "postgres": {
+            "id": "qAtIAYuMkQS4QYXV",
+            "name": "Postgres account 5"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "respondWith": "text",
+          "responseBody": "={{ $('Router').item.json.reply }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.4,
+        "position": [
+          -640,
+          2992
+        ],
+        "id": "173da947-507f-4404-a476-1debae5ad189",
+        "name": "Répondre Completed"
+      }
+    ],
+    "connections": {
+      "Webhook - Entrée Utilisateur": {
+        "main": [
+          [
+            {
+              "node": "Search Client in Supabase",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Search Client in Supabase": {
+        "main": [
+          [
+            {
+              "node": "Client existe ?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Client existe ?": {
+        "main": [
+          [
+            {
+              "node": "Update Timestamp",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Create Client",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Client": {
+        "main": [
+          [
+            {
+              "node": "Normaliser Input",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Timestamp": {
+        "main": [
+          [
+            {
+              "node": "Normaliser Input",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Normaliser Input": {
+        "main": [
+          [
+            {
+              "node": "AI Agent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "xAI Grok": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "AI Agent",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Memory": {
+        "ai_memory": [
+          [
+            {
+              "node": "AI Agent",
+              "type": "ai_memory",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "AI Agent": {
+        "main": [
+          [
+            {
+              "node": "Parser Réponse",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parser Réponse": {
+        "main": [
+          [
+            {
+              "node": "Router",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Router": {
+        "main": [
+          [
+            {
+              "node": "Répondre Onboarding",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Préparer Update",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Préparer Update": {
+        "main": [
+          [
+            {
+              "node": "Update Client Final",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Client Final": {
+        "main": [
+          [
+            {
+              "node": "Répondre Completed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "meta": {
+      "instanceId": "1be4aeb2bb571a73064575446cea62ab21cb66261219a5951c177b0b0485e798"
+    }
+  }

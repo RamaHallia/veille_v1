@@ -1,0 +1,1242 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  c.id,\n  c.user_id,\n  c.prenom,\n  c.email,\n  c.email_destinataires,\n  c.email_cc,\n  c.secteur,\n  c.mots_cles,\n  c.concurrents,\n  c.profiles_linkedin,\n  c.flux_rss_valides,\n  c.frequence,\n  c.heure_envoi,\n  c.canaux_diffusion,\n  c.alertes_temps_reel\nFROM public.clients c\nWHERE c.status_onboarding = 'completed'\n  AND c.frequence IS NOT NULL\n  AND c.heure_envoi IS NOT NULL\n  -- Convertir heure_envoi::time et comparer avec NOW() + 1h (GMT+1)\n  AND c.heure_envoi::time >= ((NOW() AT TIME ZONE 'UTC' + INTERVAL '1 hour' - INTERVAL '3 minutes')::time)\n  AND c.heure_envoi::time <= ((NOW() AT TIME ZONE 'UTC' + INTERVAL '1 hour')::time)\n  -- NOUVEAU : Exclure les clients qui ont déjà reçu un rapport aujourd'hui\n  AND NOT EXISTS (\n    SELECT 1 \n    FROM public.rapports r\n    WHERE r.client_id = c.id\n      AND DATE(r.date_generation) = CURRENT_DATE\n      AND r.envoye_par_email = true\n  )",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -1728,
+        928
+      ],
+      "id": "39375986-ced8-473b-a530-ddd4e421a197",
+      "name": "Get Clients Supabase",
+      "credentials": {
+        "postgres": {
+          "id": "qAtIAYuMkQS4QYXV",
+          "name": "Postgres account 5"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const clients = $input.all();\nconsole.log(`=== FILTRER FRÉQUENCE ===`);\nconsole.log(`Clients reçus: ${clients.length}`);\n\nconst now = new Date();\nconst dayOfWeek = now.getDay();\nconst dayOfMonth = now.getDate();\n\nconst filteredClients = clients.filter(client => {\n  const freq = client.json.frequence;\n  console.log(`Client ${client.json.email} - Fréquence: ${freq}`);\n  \n  if (freq === 'quotidienne') return true;\n  if (freq === 'hebdomadaire' && dayOfWeek === 1) return true;\n  if (freq === 'mensuelle' && dayOfMonth === 1) return true;\n  \n  return false;\n});\n\nconsole.log(`Clients filtrés: ${filteredClients.length}`);\n\nif (filteredClients.length === 0) {\n  throw new Error('⚠️ Aucun client à traiter pour cette fréquence');\n}\n\nreturn filteredClients;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1536,
+        928
+      ],
+      "id": "e97d7a0e-a2a9-46d7-8275-e2923d7f9663",
+      "name": "Filtrer Fréquence"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== GÉNÉRER REQUÊTES - VERSION CORRIGÉE ====================\n\nconst items = $input.all();\nconsole.log('=== ENTRÉE NODE ===');\nconsole.log(`Nombre d'items reçus: ${items.length}`);\n\nif (items.length === 0) {\n  throw new Error('❌ Aucun client reçu ! Vérifier le node \"Filtrer Fréquence\"');\n}\n\nconst clientData = items[0].json;\n\n// Debug complet des données reçues\nconsole.log('=== DONNÉES CLIENT BRUTES ===');\nconsole.log(JSON.stringify(clientData, null, 2));\n\n// Helper amélioré pour parser les arrays PostgreSQL\nconst parseArray = (value) => {\n  console.log(`Parsing array - Type: ${typeof value}, Value:`, value);\n  \n  if (!value) return [];\n  if (Array.isArray(value)) return value;\n  \n  if (typeof value === 'string') {\n    // Format PostgreSQL: {val1,val2,val3} ou {\"val1\",\"val2\"}\n    if (value.startsWith('{') && value.endsWith('}')) {\n      const cleaned = value.slice(1, -1);\n      if (!cleaned) return [];\n      \n      return cleaned\n        .split(',')\n        .map(x => x.trim())\n        .map(x => x.replace(/^\"(.*)\"$/, '$1')) // Retirer guillemets\n        .map(x => x.replace(/\\\\\\\"/g, '\"')) // Unescape quotes\n        .filter(Boolean);\n    }\n    \n    // Tenter JSON parse\n    try {\n      const parsed = JSON.parse(value);\n      if (Array.isArray(parsed)) return parsed;\n    } catch (e) {\n      // Ignore, essayer autre chose\n    }\n    \n    // Fallback: split simple\n    return value.split(',').map(x => x.trim()).filter(Boolean);\n  }\n  \n  return [];\n};\n\n// Helper pour nettoyer les strings\nconst cleanString = (str) => {\n  if (!str) return '';\n  return String(str).trim();\n};\n\n// Extraction des données avec fallbacks\nconst secteur = cleanString(clientData.secteur || 'secteur');\nconst motsCles = parseArray(clientData.mots_cles || clientData['Mots clés'] || clientData.keywords || []);\nconst concurrents = parseArray(clientData.concurrents || clientData.competitors || []);\n\nconsole.log('=== DONNÉES PARSÉES ===');\nconsole.log('Secteur:', secteur);\nconsole.log('Mots-clés:', motsCles);\nconsole.log('Concurrents:', concurrents);\n\n// Vérifications\nif (!secteur || secteur === 'secteur') {\n  console.warn('⚠️ Secteur manquant ou par défaut');\n}\n\nif (motsCles.length === 0) {\n  console.warn('⚠️ Aucun mot-clé trouvé');\n}\n\nif (concurrents.length === 0) {\n  console.warn('⚠️ Aucun concurrent trouvé');\n}\n\n// Génération des requêtes\nconst queries = [];\nconst MAX_QUERIES = 15;\n\n// 1. Requête secteur (toujours présente)\nqueries.push({\n  json: {\n    query: `${secteur} actualité France`,\n    page: 1,\n    type: 'secteur',\n    label: 'Secteur général',\n    client_id: clientData.id,\n    client_email: clientData.email\n  }\n});\n\n// 2. Requêtes mots-clés\nmotsCles.forEach((motCle, index) => {\n  if (motCle && motCle.length > 1) {\n    queries.push({\n      json: {\n        query: `${secteur} ${motCle} actualité`,\n        page: 1,\n        type: 'motcle',\n        motcle: motCle,\n        label: `Mot-clé: ${motCle}`,\n        client_id: clientData.id,\n        client_email: clientData.email\n      }\n    });\n  }\n});\n\n// 3. Requêtes concurrents\nconcurrents.forEach((concurrent, index) => {\n  if (concurrent && concurrent.length > 1) {\n    queries.push({\n      json: {\n        query: `${concurrent} actualité ${secteur}`,\n        page: 1,\n        type: 'concurrent',\n        concurrent: concurrent,\n        label: `Concurrent: ${concurrent}`,\n        client_id: clientData.id,\n        client_email: clientData.email\n      }\n    });\n  }\n});\n\n// Limitation et vérification finale\nconst queriesFinal = queries.slice(0, MAX_QUERIES);\n\nconsole.log('=== RÉSULTAT FINAL ===');\nconsole.log(`Requêtes générées: ${queriesFinal.length}/${queries.length}`);\nqueriesFinal.forEach((q, i) => {\n  console.log(`${i+1}. [${q.json.type}] ${q.json.query}`);\n});\n\nif (queriesFinal.length === 0) {\n  throw new Error('❌ Aucune requête générée ! Vérifier les données Supabase.');\n}\n\nreturn queriesFinal;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1344,
+        928
+      ],
+      "id": "6e3602a5-c9ca-4773-959c-e1ab184e0433",
+      "name": "Générer Requêtes"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"q\": \"{{ $json.query }}\",\n  \"gl\": \"fr\",\n  \"hl\": \"fr\",\n  \"page\": {{ $json.page }},\n  \"tbs\": \"qdr:d\",\n  \"autocorrect\": true,\n  \"num\": 10\n}\n",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 300
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1136,
+        928
+      ],
+      "id": "1acd7041-450c-45d7-bf3c-d30f66530823",
+      "name": "Serper Search",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "wH2o9cbFoWNdjlq5",
+          "name": "Header Auth account 4"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Agréger résultats\nconst allItems = $input.all();\nconst allResults = [];\n\nfor (const item of allItems) {\n  const organic = item.json.organic || [];\n  allResults.push(...organic);\n}\n\nconst uniqueResults = [];\nconst seenUrls = new Set();\n\nfor (const result of allResults) {\n  if (!seenUrls.has(result.link)) {\n    seenUrls.add(result.link);\n    uniqueResults.push(result);\n  }\n}\n\nconst sourcesText = uniqueResults.map((r, i) => {\n  return `SOURCE ${i+1}\\nTitre: ${r.title}\\nURL: ${r.link}\\nDate: ${r.date || 'N/A'}\\nExtrait: ${r.snippet}\\n`;\n}).join('\\n---\\n');\n\nconst clientInfo = allItems[0]?.json;\nconst currentDate = new Date().toLocaleDateString('fr-FR');\n\nreturn [{\n  json: {\n    sourcesText,\n    sourcesCount: uniqueResults.length,\n    date: currentDate,\n    client_id: clientInfo?.client_id,\n    client_email: clientInfo?.client_email,\n    allResults: uniqueResults\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -912,
+        912
+      ],
+      "id": "2358fc41-fb65-4ca6-90db-08307e413f8e",
+      "name": "Agréger Résultats"
+    },
+    {
+      "parameters": {
+        "model": "grok-4-fast-reasoning",
+        "options": {
+          "maxTokens": 25000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [
+        -736,
+        1136
+      ],
+      "id": "7bc05302-1dcb-4a80-9c30-762a1441c3ec",
+      "name": "Grok HTML",
+      "credentials": {
+        "xAiApi": {
+          "id": "xR0cDwxWRWiGZdNG",
+          "name": "xAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Tu es un expert en veille strategique et analyse sectorielle. Ta mission est de creer un bulletin de veille professionnel du {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }} pour le secteur {{ $json.secteur }}\n base sur les sources fournies.\n\nSOURCES A ANALYSER : parle obligatoirement de ce qu'il c'est passer ajd pas des jours d'avant dans les sources tu dois avoir des éléments correspand a la date dajd \n{{ $json.sourcesText }} \n\nCONTRAINTES STRICTES :\n- Date du rapport : {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }} (a mentionner systematiquement)\n- Secteur analyse : {{ $json.secteur }}\n- Longueur totale : exactement 1200 mots maximum de contenu analytique (hors balises HTML)\n- Format : HTML complet avec structure professionnelle\n- Ton : Professionnel, factuel, oriente business et prise de decision\n- Objectif : Aider les entreprises du secteur a prendre des decisions strategiques immediates\n\nSTRUCTURE OBLIGATOIRE DU RAPPORT :\n\n1. TITRE & DATE\nTitre : Veille {{ $json.secteur }} - du {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}\n\n2. RESUME EXECUTIF\nSynthetise les 3-4 informations critiques du jour en bullet points courts et percutants. Identifie les impacts immediats sur les entreprises du secteur {{ $json.secteur }}.\n\n3. SECTIONS THEMATIQUES (3 a 4 sections MINIMUM)\nOrganise les actualites par themes pertinents pour le secteur {{ $json.secteur }}\n. Exemples de themes possibles :\n- Aides & Financements\n- Reglementation & Obligations\n- Marche & Opportunites Business\n- Technologies & Innovation\n- Concurrence & Acteurs\n\nPOUR CHAQUE SECTION THEMATIQUE :\nStructure obligatoire :\na) TITRE H2 de la section (exemple : \"Concurrence & Acteurs\")\nb) SOUS-TITRE H3 avec titre de l actualite SANS tag (exemple : \"Un genie francais revolutionne l IA\" - PAS de [CONCURRENCE])\nc) PARAGRAPHE descriptif avec chiffres precis, dates, conditions. Developpe suffisamment le contexte et les enjeux.\nd) TABLEAU HTML si donnees chiffrees (montants, echeances, conditions)\ne) BLOC OPPORTUNITE POUR VOTRE ENTREPRISE avec titre \"Opportunites pour votre entreprise :\" et 3 actions concretes en bullet points\nf) BOUTON LIEN 4 maximum avec class CSS \"btn-link\" (exemple : <a href=\"...\" class=\"btn-link\" target=\"_blank\" rel=\"noopener\">Lisez le portrait detaille sur Mediapart</a>)\n\nINTERDICTION ABSOLUE :\n- NE JAMAIS utiliser de tags [TYPE] dans les titres H3 ou ailleurs (PAS de [REGLEMENTATION], [MARCHE], [CONCURRENCE], etc.)\n- NE JAMAIS mentionner le nombre de mots dans le HTML\n- NE PAS creer de sections \"Notes\" ou \"Bibliographie\"\n\nOBLIGATION BOUTONS :\n- CHAQUE actualite doit avoir UN BOUTON lien en fin de section\n- Utiliser la class CSS \"btn-link\" pour tous les boutons\n- Texte du bouton descriptif et contextuel (exemple : \"Lisez le portrait detaille sur Mediapart\", \"Decouvrez l etude complete\", \"Consultez les details reglementaires\")\n\n4. MARCHE & OPPORTUNITES BUSINESS\nAnalyse la tendance dominante du secteur {{ $json.secteur }} ce {{ $now.toFormat('dd/MM/yyyy') }}. Identifie les opportunites emergentes, les risques, les changements de dynamique marche.\n\n5. ALERTES & ECHEANCES IMPORTANTES\nListe en bullet points les dates cles a ne pas manquer, deadlines, changements reglementaires imminents specifiques au secteur {{ $json.secteur }}.\n\n6. TABLEAU RECAPITULATIF FINAL\nTableau HTML synthetisant toutes les aides/mesures/reglementations en vigueur avec colonnes : \nNom | Montant ou Description | Conditions principales | Date effet | Lien\nDans la colonne Lien, integre un bouton avec class=\"btn-link\" et texte court (exemple : \"<a href=... class=btn-link>Details</a>\")\n\nELEMENTS HTML OBLIGATOIRES :\n- Au moins 3 tableaux HTML (<table>) pour presenter donnees structurees\n- Minimum 6 boutons avec class=\"btn-link\" pour les liens vers sources\n- Blocs visuels distincts pour les opportunites entreprise (background colore, border-left)\n- Sections bien delimitees avec titres <h2> et sous-titres <h3>\n- AUCUN tag [TYPE] nulle part\n\nTAILLES DE POLICES OBLIGATOIRES :\n- h1 (titre principal) : 20px, font-weight: 700\n- h2 (sections principales) : 15px, font-weight: 600\n- h3 (sous-sections) : 11px, font-weight: 600\n- Paragraphes : 9px, line-height: 1.6\n- Tableaux : 10px\n- Tags [Type] : 9px, uppercase, font-weight: 700, background: #2c7cc1, color: white, padding: 2px 8px\n- Footer : 10px, italic\n\n\n<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  <title>Rapport de veille stratégique - Secteur {{ $json.secteur }}</title>\n  <style>\n    body {\n      font-family: \"Segoe UI\", Tahoma, Geneva, Verdana, sans-serif;\n      font-size: 9.7px;\n      line-height: 1.38;\n      margin: 22px auto;\n      max-width: 800px;\n      color: #222;\n      background: #fff;\n    }\n    header {\n      border-bottom: 3px solid #1f4e79;\n      margin-bottom: 14px;\n      padding-bottom: 7px;\n    }\n    header h1 {\n      color: #1f4e79;\n      font-size: 1.16em;\n      margin: 0;\n      letter-spacing: 0.35px;\n    }\n    .date {\n      color: #3778c2;\n      font-weight: 600;\n      font-size: 0.98em;\n      text-align: right;\n      font-style: italic;\n      margin-top: 2px;\n    }\n    section {\n      margin-bottom: 15px;\n    }\n    section h2 {\n      font-size: 1.02em;\n      color: #1a3a66;\n      border-left: 5px solid #1f4e79;\n      padding-left: 8px;\n      margin-bottom: 7px;\n      font-weight: 700;\n    }\n    .summary {\n      font-style: italic;\n      background: #f0f5fb;\n      padding: 8px 12px;\n      border-radius: 6px;\n      color: #2e3b4e;\n      font-size: 1em;\n      text-align: justify;\n    }\n    table {\n      width: 100%;\n      border-collapse: collapse;\n      font-size: 9px;\n      margin-top: 5px;\n      margin-bottom: 10px;\n    }\n    th, td {\n      border: 1px solid #bbb;\n      padding: 6px 9px;\n      vertical-align: top;\n      text-align: left;\n    }\n    th {\n      background: #d9e4f5;\n    }\n    ul {\n      margin-left: 16px;\n      color: #364a67;\n      padding-bottom: 5px;\n    }\n   a.btn-link {\n      font-weight: 600;\n      font-size: 9px;\n      color: #1f4e79;\n      background: #dbeaff;\n      padding: 5px 11px;\n      border-radius: 6px;\n      text-decoration: none;\n      display: inline-block;\n      margin-top: 5px;\n      transition: background-color 0.2s ease;\n    }\n    a.btn-link:hover {\n      background: #aec9f7;\n    }\n    footer {\n      border-top: 1px solid #ccc;\n      margin-top: 20px;\n      padding-top: 7px;\n      font-size: 9.7px;\n      color: #5b6b85;\n      text-align: right;\n      font-style: italic;\n    }\n    .table-caption {\n      font-weight: 600;\n      margin-bottom: 4px;\n      color: #2a3a66;\n      font-size: 10px;\n    }\n  </style>\n</head>\n<body>\n\n<header>\n  <h1>La veille stratégique du jour - Secteur {{ $json.secteur }}</h1>\n  <div class=\"date\">Généré le {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}</div>\n</header>\n\n<section aria-label=\"Introduction et résumé\">\n  <h2>[Idée de titre dynamique pour introduire le rapport qui parle de la date du jour]</h2>\n  <p class=\"summary\">\n    Dans ce résumé analytique, assure-toi de toujours mentionner que ce rapport couvre les événements et données du jour, le {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}, pour ancrer parfaitement les informations dans le contexte actuel.\n  </p>\n</section>\n\n<section aria-label=\"Indicateurs clés\">\n  <h2>[Titre dynamique selon les données du {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}]</h2>\n  <p class=\"table-caption\">Tableau technique des indicateurs clés, expliquant impacts stratégiques et opérationnels ce {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}.</p>\n  <table>\n    <thead>\n      <tr><th>Indicateur</th><th>Valeur</th><th>Impact</th><th>Action recommandée</th></tr>\n    </thead>\n    <tbody>\n      (indicateurs_tableau)\n    </tbody>\n  </table>\n  <a href=\"(indicateur_lien_1)\" class=\"btn-link\" target=\"_blank\" rel=\"noopener\">Consulter la source des indicateurs</a>\n</section>\n\n<section aria-label=\"Risques et réglementations\">\n  <h2>[Titre sur les risques majeurs relevés ce jour]</h2>\n  <ul>\n    (risques_bullets)\n  </ul>\n  <a href=\"(risque_lien_1)\" class=\"btn-link\" target=\"_blank\" rel=\"noopener\">Voir les détails réglementaires</a>\n</section>\n\n<section aria-label=\"Tendances et innovations\">\n  <h2>[Titre sur les tendances et innovations principales du {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}]</h2>\n  <ul>\n    (tendances_bullets)\n  </ul>\n  <a href=\"(tendance_lien_1)\" class=\"btn-link\" target=\"_blank\" rel=\"noopener\">Découvrir les tendances majeures du jour</a>\n</section>\n\n<section aria-label=\"Analyse concurrentielle\">\n  <h2>[Titre dynamique lié à l'actualité concurrentielle du {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}]</h2>\n  <p>\n    Ici, rappelle bien que sont analysés les mouvements et annonces du jour le {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}, afin de bien situer le contexte d'actualité.\n  </p>\n  <table>\n    <thead>\n      <tr><th>Concurrent</th><th>Fait marquant</th><th>Lien utile</th></tr>\n    </thead>\n    <tbody>\n      (concurrent_tableau)\n    </tbody>\n  </table>\n  <a href=\"(concurrent_lien_1)\" class=\"btn-link\" target=\"_blank\" rel=\"noopener\">En savoir plus sur les concurrents</a>\n</section>\n\n<section aria-label=\"Recommandations\">\n  <h2>[Titre conseil et recommandations pour le {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}]</h2>\n  <ul>\n    (recommendations_list)\n  </ul>\n</section>\n\n<footer>\n  Rapport généré automatiquement le {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}.\n</footer>\n\n</body>\n</html>",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        -736,
+        912
+      ],
+      "id": "380c162d-fa7d-486d-bac4-72ae600b5636",
+      "name": "Générer HTML"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputData = $input.first().json;\nlet htmlContent = inputData.text || inputData.html || inputData.content || '';\n\nconsole.log('Longueur input:', htmlContent.length);\n\nconst backtickTriple = String.fromCharCode(96, 96, 96);\nhtmlContent = htmlContent.split(backtickTriple + 'html').join('');\nhtmlContent = htmlContent.split(backtickTriple).join('');\nhtmlContent = htmlContent.split('\\\\n').join('\\n');\nhtmlContent = htmlContent.split('\\\\\"').join('\"');\n\nconst startIndex = htmlContent.indexOf('<!DOCTYPE');\nconst endIndex = htmlContent.lastIndexOf('</html>');\n\nif (startIndex !== -1 && endIndex !== -1) {\n  htmlContent = htmlContent.substring(startIndex, endIndex + 7);\n  console.log('HTML extrait avec succes');\n} else {\n  console.warn('Balises HTML introuvables');\n}\n\nconst hasDoctype = htmlContent.indexOf('<!DOCTYPE') !== -1;\nconst hasHtml = htmlContent.indexOf('<html') !== -1;\nconst hasBody = htmlContent.indexOf('<body') !== -1;\nconst hasClosing = htmlContent.indexOf('</html>') !== -1;\n\nconsole.log('Validation:');\nconsole.log('- DOCTYPE:', hasDoctype);\nconsole.log('- HTML tag:', hasHtml);\nconsole.log('- BODY tag:', hasBody);\nconsole.log('- Closing:', hasClosing);\nconsole.log('- Longueur finale:', htmlContent.length);\n\nreturn [{\n  json: {\n    html: htmlContent,\n    isValid: hasDoctype && hasHtml && hasBody && hasClosing,\n    length: htmlContent.length\n  }\n}];\n\n\n// // ==================== NETTOYER HTML - VERSION CORRIGÉE ====================\n\n// const inputItem = $input.first();\n\n// // Extraire le HTML depuis la réponse de l'AI\n// let html = (inputItem.json?.text || inputItem.json?.message?.content || inputItem.json?.output || '').trim();\n\n// console.log('=== NETTOYER HTML ===');\n// console.log('HTML brut reçu (premiers 200 chars):', html.substring(0, 200));\n\n// // Nettoyer le HTML des backticks markdown\n// html = html.replace(/```html\\n?/gi, '').replace(/```\\n?/g, '');\n\n// // Nettoyer les échappements\n// html = html.replace(/\\\\n/g, '\\n').replace(/\\\\\"/g, '\"').replace(/\\\\'/g, \"'\");\n\n// // Extraire le HTML complet entre <!DOCTYPE et </html>\n// const start = html.indexOf('<!DOCTYPE');\n// const end = html.lastIndexOf('</html>');\n\n// if (start !== -1 && end !== -1) {\n//   html = html.substring(start, end + 7);\n//   console.log('✅ HTML extrait entre DOCTYPE et </html>');\n// } else {\n//   console.warn('⚠️ Pas de DOCTYPE ou </html> trouvé, utilisation du HTML brut');\n// }\n\n// // Vérification\n// if (!html || html.length < 100) {\n//   console.error('❌ HTML trop court ou vide:', html);\n//   throw new Error('Le HTML généré est invalide ou trop court');\n// }\n\n// console.log('HTML nettoyé (longueur):', html.length);\n\n// // ========== RÉCUPÉRATION CLIENT INFO ==========\n// let clientId = null;\n// let clientEmail = null;\n\n// // Méthode 1 : Depuis \"Agréger Résultats\"\n// try {\n//   const agregerItems = $('Agréger Résultats').all();\n//   if (agregerItems && agregerItems.length > 0) {\n//     clientId = agregerItems[0].json?.client_id;\n//     clientEmail = agregerItems[0].json?.client_email;\n//     console.log('Client trouvé via Agréger Résultats:', clientId);\n//   }\n// } catch (e) {\n//   console.warn('Méthode 1 échouée:', e.message);\n// }\n\n// // Méthode 2 : Depuis l'input actuel (parfois l'AI passe les infos)\n// if (!clientId && inputItem.json?.client_id) {\n//   clientId = inputItem.json.client_id;\n//   clientEmail = inputItem.json.client_email;\n//   console.log('Client trouvé via input actuel:', clientId);\n// }\n\n// // Méthode 3 : Depuis \"Générer Requêtes\"\n// if (!clientId) {\n//   try {\n//     const genReqItems = $('Générer Requêtes').all();\n//     if (genReqItems && genReqItems.length > 0) {\n//       clientId = genReqItems[0].json?.client_id;\n//       clientEmail = genReqItems[0].json?.client_email;\n//       console.log('Client trouvé via Générer Requêtes:', clientId);\n//     }\n//   } catch (e) {\n//     console.warn('Méthode 3 échouée:', e.message);\n//   }\n// }\n\n// // Méthode 4 : Depuis \"Filtrer Fréquence\"\n// if (!clientId) {\n//   try {\n//     const filtreItems = $('Filtrer Fréquence').all();\n//     if (filtreItems && filtreItems.length > 0) {\n//       clientId = filtreItems[0].json?.id;\n//       clientEmail = filtreItems[0].json?.email;\n//       console.log('Client trouvé via Filtrer Fréquence:', clientId);\n//     }\n//   } catch (e) {\n//     console.warn('Méthode 4 échouée:', e.message);\n//   }\n// }\n\n// console.log('=== CLIENT INFO FINAL ===');\n// console.log('client_id:', clientId);\n// console.log('client_email:', clientEmail);\n\n// // Si toujours pas de client, ERREUR\n// if (!clientId || !clientEmail) {\n//   console.error('❌ IMPOSSIBLE DE TROUVER LES INFOS CLIENT !');\n//   throw new Error('client_id ou client_email introuvable dans le workflow');\n// }\n\n// return [{\n//   json: {\n//     html,\n//     client_id: clientId,\n//     client_email: clientEmail\n//   }\n// }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        912
+      ],
+      "id": "d6aca0c1-d594-41e3-9f80-2544f94aa048",
+      "name": "Nettoyer HTML"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Récupère le HTML nettoyé depuis le champ 'html'\nconst htmlContent = items[0].json.html;\n\n// Vérifie qu'on a bien du contenu HTML à convertir\nif (!htmlContent || typeof htmlContent !== 'string') {\n  return [{\n    json: {\n      success: false,\n      error: \"Aucun HTML valide trouvé dans items[0].json.html\"\n    }\n  }];\n}\n\n// Conversion en binaire (utf-8) pour Gotenberg\nreturn [{\n  json: {\n    success: true,\n    message: \"HTML converti en binaire\"\n  },\n  binary: {\n    data: {\n      data: Buffer.from(htmlContent, \"utf-8\"),\n      mimeType: \"text/html\",\n      fileName: \"index.html\"\n    }\n  }\n}];\n\n\n// // ==================== HTML → BINAIRE - VERSION CORRIGÉE ====================\n\n// const items = $input.all();\n\n// console.log('=== HTML → BINAIRE ===');\n// console.log(`Items reçus: ${items.length}`);\n\n// if (items.length === 0) {\n//   throw new Error('❌ Aucun item reçu !');\n// }\n\n// const inputData = items[0].json;\n\n// // Vérification du HTML\n// const html = inputData.html;\n// if (!html || typeof html !== 'string') {\n//   console.error('❌ HTML manquant ou invalide:', typeof html);\n//   throw new Error('Le HTML est manquant ou invalide');\n// }\n\n// console.log('HTML reçu (longueur):', html.length);\n// console.log('client_id:', inputData.client_id);\n// console.log('client_email:', inputData.client_email);\n\n// // Conversion en Buffer\n// const htmlBuffer = Buffer.from(html, 'utf-8');\n\n// console.log('✅ Buffer créé, taille:', htmlBuffer.length, 'bytes');\n\n// return [{\n//   json: {\n//     client_id: inputData.client_id,\n//     client_email: inputData.client_email\n//   },\n//   binary: {\n//     data: {\n//       data: htmlBuffer.toString('base64'),\n//       mimeType: 'text/html',\n//       fileName: 'index.html',\n//       fileExtension: 'html'\n//     }\n//   }\n// }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        912
+      ],
+      "id": "f15c11d9-f954-4e2d-a8ec-0efe135d52ca",
+      "name": "HTML → Binaire"
+    },
+    {
+      "parameters": {
+        "model": "grok-4-fast-reasoning",
+        "options": {
+          "maxTokens": 25000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [
+        16,
+        864
+      ],
+      "id": "194c5783-849f-43f7-af26-8448c180e7f0",
+      "name": "Grok Audio",
+      "credentials": {
+        "xAiApi": {
+          "id": "xR0cDwxWRWiGZdNG",
+          "name": "xAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Tu es un assistant qui crée des résumés audio naturels et conversationnels.\n\nINPUT : {{ $('Générer HTML').item.json.text }}\n\nDATE : {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }}\n\nCONSIGNES STRICTES :\n\n1. Utilise uniquement des mots simples et courants\n2. Construis des phrases longues et fluides de maximium 150 mots chacune\n3. Évite les mots techniques sans les expliquer\n4. Écris TOUTES les dates et années en toutes lettres (2025 = deux mille vingt-cinq, pas \"2025\")\n5. Ton amical\n6. Parle au présent\n\nSTRUCTURE OBLIGATOIRE :\n\n\n\nPhrase d'ouverture (maximum 100 mots) :\nBonjour jespere que tu vas bien aujorudhui on est le {{ $now.toFormat('dd MMMM yyyy', { locale: 'fr' }) }} on va voir ce qu'il se passe dans le dire le nom du secteur .........\n\nCorps du résumé (3 à 5 phrases longues de maximum 100 mots chacune) :\n- Chaque phrase doit présenter UN sujet principal\n- Développe avec des détails, chiffres et contexte\n- Connecte les idées avec \"et\", \"parce que\", \"donc\", \"alors\"\n- Garde un flux naturel comme une vraie conversation\n\n\nOBLIGATOIREMENT 300-500 MOTS MAXIMUM PAS MOINS PAS PLUS",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        16,
+        736
+      ],
+      "id": "071c221a-87d7-4d76-8398-a147863c68e2",
+      "name": "Générer Audio"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== NETTOYER AUDIO - VERSION CORRIGÉE ====================\n\nconst inputItem = $input.first();\n\nconsole.log('=== NETTOYER AUDIO ===');\n\n// Extraire le texte depuis la réponse de l'AI\nconst texte = (inputItem.json?.message?.content || inputItem.json?.text || inputItem.json?.output || '')\n  .replace(/\\\\n/g, ' ')    // Remplacer \\n par espace\n  .replace(/\\n/g, ' ')     // Remplacer vrais retours à la ligne\n  .replace(/!/g, '.')      // ! devient .\n  .replace(/\\?/g, '.')     // ? devient .\n  .replace(/:/g, ',')      // : devient ,\n  .replace(/\"/g, \"'\")      // \" devient '\n  .replace(/\\.{2,}/g, '.') // Multiple . devient un seul\n  .replace(/\\s{2,}/g, ' ') // Multiple espaces devient un seul\n  .trim();\n\nconsole.log('Texte audio (longueur):', texte.length);\n\n// Vérification\nif (!texte || texte.length < 50) {\n  console.error('❌ Texte trop court:', texte);\n  throw new Error('Le texte audio généré est trop court (< 50 caractères)');\n}\n\n// Limiter la longueur pour Fish Audio (max ~500 mots)\nconst MAX_CHARS = 10000;\nlet texteFinal = texte;\n\nif (texte.length > MAX_CHARS) {\n  console.warn(`⚠️ Texte trop long (${texte.length} chars), troncature à ${MAX_CHARS}`);\n  texteFinal = texte.substring(0, MAX_CHARS) + '.';\n}\n\nconsole.log('Texte final (longueur):', texteFinal.length);\n\n// ========== RÉCUPÉRATION CLIENT INFO ==========\nlet clientId = null;\nlet clientEmail = null;\n\n// Méthode 1 : Depuis \"Nettoyer HTML\" (le plus proche)\ntry {\n  const nettoyerHtmlItems = $('Nettoyer HTML').all();\n  if (nettoyerHtmlItems && nettoyerHtmlItems.length > 0) {\n    clientId = nettoyerHtmlItems[0].json?.client_id;\n    clientEmail = nettoyerHtmlItems[0].json?.client_email;\n    console.log('✅ Client trouvé via Nettoyer HTML:', clientId);\n  }\n} catch (e) {\n  console.warn('Méthode 1 échouée:', e.message);\n}\n\n// Méthode 2 : Depuis \"Agréger Résultats\"\nif (!clientId) {\n  try {\n    const agregerItems = $('Agréger Résultats').all();\n    if (agregerItems && agregerItems.length > 0) {\n      clientId = agregerItems[0].json?.client_id;\n      clientEmail = agregerItems[0].json?.client_email;\n      console.log('✅ Client trouvé via Agréger Résultats:', clientId);\n    }\n  } catch (e) {\n    console.warn('Méthode 2 échouée:', e.message);\n  }\n}\n\n// Méthode 3 : Depuis \"Générer Requêtes\"\nif (!clientId) {\n  try {\n    const genReqItems = $('Générer Requêtes').all();\n    if (genReqItems && genReqItems.length > 0) {\n      clientId = genReqItems[0].json?.client_id;\n      clientEmail = genReqItems[0].json?.client_email;\n      console.log('✅ Client trouvé via Générer Requêtes:', clientId);\n    }\n  } catch (e) {\n    console.warn('Méthode 3 échouée:', e.message);\n  }\n}\n\n// Méthode 4 : Depuis \"Filtrer Fréquence\"\nif (!clientId) {\n  try {\n    const filtreItems = $('Filtrer Fréquence').all();\n    if (filtreItems && filtreItems.length > 0) {\n      clientId = filtreItems[0].json?.id;\n      clientEmail = filtreItems[0].json?.email;\n      console.log('✅ Client trouvé via Filtrer Fréquence:', clientId);\n    }\n  } catch (e) {\n    console.warn('Méthode 4 échouée:', e.message);\n  }\n}\n\n// Méthode 5 : Depuis \"Gotenberg PDF\" (si déjà passé)\nif (!clientId) {\n  try {\n    const gotenbergItems = $('Gotenberg PDF').all();\n    if (gotenbergItems && gotenbergItems.length > 0) {\n      clientId = gotenbergItems[0].json?.client_id;\n      clientEmail = gotenbergItems[0].json?.client_email;\n      console.log('✅ Client trouvé via Gotenberg PDF:', clientId);\n    }\n  } catch (e) {\n    console.warn('Méthode 5 échouée:', e.message);\n  }\n}\n\nconsole.log('=== CLIENT INFO FINAL ===');\nconsole.log('client_id:', clientId);\nconsole.log('client_email:', clientEmail);\n\n// Si toujours pas de client, ERREUR\nif (!clientId || !clientEmail) {\n  console.error('❌ IMPOSSIBLE DE TROUVER LES INFOS CLIENT !');\n  \n  // Debug : afficher tous les nodes disponibles\n  console.log('Nodes disponibles pour debug:');\n  try {\n    const allNodeNames = ['Nettoyer HTML', 'Agréger Résultats', 'Générer Requêtes', 'Filtrer Fréquence', 'Gotenberg PDF'];\n    allNodeNames.forEach(nodeName => {\n      try {\n        const items = $(nodeName).all();\n        console.log(`  ${nodeName}: ${items.length} items`);\n        if (items.length > 0) {\n          console.log(`    Keys:`, Object.keys(items[0].json));\n        }\n      } catch (e) {\n        console.log(`  ${nodeName}: non accessible`);\n      }\n    });\n  } catch (e) {\n    console.log('Impossible de lister les nodes');\n  }\n  \n  throw new Error('client_id ou client_email introuvable dans le workflow. Vérifier la transmission des données.');\n}\n\nreturn [{\n  json: {\n    text_propre: texteFinal,\n    client_id: clientId,\n    client_email: clientEmail\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        736
+      ],
+      "id": "68273809-7667-4ed6-a37f-13a33420674c",
+      "name": "Nettoyer Audio"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fish.audio/v1/tts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "audio/mpeg"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer de290b7aafe34bfa8ce460e9c5fa7bab"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"text\": \"{{ $json.text_propre }}\", \"reference_id\": \"3bce5f0710f949888abe982ded1ef731\", \"format\": \"mp3\", \"model\": \"s1\"}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        464,
+        736
+      ],
+      "id": "f286f74d-f141-4f09-8c3f-3c1b12610040",
+      "name": "Fish Audio",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "3pM3xv0pe71nOct9",
+          "name": "Header Auth account 5"
+        },
+        "httpBearerAuth": {
+          "id": "vz6JUSvLOmFM9JxL",
+          "name": "Bearer Auth account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 90
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1936,
+        928
+      ],
+      "id": "4f704942-75ad-4109-bd3c-462604639843",
+      "name": "Schedule Trigger1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        720,
+        1008
+      ],
+      "id": "84b3bb41-c9b1-4200-a892-83039f77ee98",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== PRÉPARER UPLOAD SUPABASE - VERSION ULTRA-CORRIGÉE ====================\n\nconst combinerData = $input.first();\n\nconsole.log('=== DEBUG COMBINER DATA ===');\nconsole.log('JSON keys:', Object.keys(combinerData.json));\nconsole.log('Binary keys:', Object.keys(combinerData.binary || {}));\n\n// Vérifier que les fichiers binaires existent\nif (!combinerData.binary) {\n  console.error('❌ Aucune donnée binaire !');\n  throw new Error('Les données binaires (PDF/Audio) sont manquantes');\n}\n\nif (!combinerData.binary.pdf) {\n  console.error('❌ PDF manquant !');\n  console.error('Binary keys:', Object.keys(combinerData.binary));\n  throw new Error('Le fichier PDF est manquant dans les données binaires');\n}\n\nif (!combinerData.binary.audio) {\n  console.error('❌ Audio manquant !');\n  console.error('Binary keys:', Object.keys(combinerData.binary));\n  throw new Error('Le fichier Audio est manquant dans les données binaires');\n}\n\nconst clientId = combinerData.json.client_id;\nconst clientEmail = combinerData.json.client_email;\n\nconsole.log('client_id:', clientId);\nconsole.log('client_email:', clientEmail);\n\n// Si client_id manquant, chercher ailleurs\nif (!clientId) {\n  console.error('❌ client_id manquant !');\n  \n  try {\n    const filtreData = $('Filtrer Fréquence').first().json;\n    if (filtreData.id) {\n      console.log('✅ Utilisation de client_id depuis Filtrer Fréquence');\n      \n      const agregerData = $('Agréger Résultats').first().json;\n      const date = new Date().toISOString().split('T')[0];\n      const timestamp = Date.now();\n      \n      const pdfPath = `pdf/${filtreData.id}/${date}-${timestamp}.pdf`;\n      const audioPath = `audio/${filtreData.id}/${date}-${timestamp}.mp3`;\n      \n      return [{\n        json: {\n          client_id: filtreData.id,\n          client_email: filtreData.email,\n          pdf_path: pdfPath,\n          audio_path: audioPath,\n          date: date,\n          secteur: filtreData.secteur || 'N/A',\n          mots_cles: filtreData.mots_cles || [],\n          nb_sources: agregerData.sourcesCount || 0\n        },\n        binary: {\n          pdf: combinerData.binary.pdf,\n          audio: combinerData.binary.audio\n        }\n      }];\n    }\n  } catch (e) {\n    console.error('Impossible de récupérer depuis Filtrer Fréquence:', e.message);\n  }\n  \n  throw new Error('client_id introuvable dans tout le workflow');\n}\n\n// Récupérer métadonnées\nconst agregerData = $('Agréger Résultats').first().json;\nconst clientData = $('Filtrer Fréquence').first().json;\n\nconst date = new Date().toISOString().split('T')[0];\nconst timestamp = Date.now();\n\n// Chemins des fichiers dans Supabase Storage\nconst pdfPath = `pdf/${clientId}/${date}-${timestamp}.pdf`;\nconst audioPath = `audio/${clientId}/${date}-${timestamp}.mp3`;\n\nconsole.log('=== PRÉPARER UPLOAD ===');\nconsole.log('client_id:', clientId);\nconsole.log('PDF path:', pdfPath);\nconsole.log('Audio path:', audioPath);\nconsole.log('PDF binary exists:', !!combinerData.binary.pdf);\nconsole.log('Audio binary exists:', !!combinerData.binary.audio);\n\nreturn [{\n  json: {\n    client_id: clientId,\n    client_email: clientEmail,\n    pdf_path: pdfPath,\n    audio_path: audioPath,\n    date: date,\n    secteur: clientData.secteur || 'N/A',\n    mots_cles: clientData.mots_cles || [],\n    nb_sources: agregerData.sourcesCount || 0\n  },\n  binary: {\n    pdf: combinerData.binary.pdf,\n    audio: combinerData.binary.audio\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        1008
+      ],
+      "id": "91ef20e6-1533-4e1a-8a5c-d4485377dd98",
+      "name": "Préparer Upload Supabase"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== DECODE BASE64 - VERSION CORRIGÉE ====================\n\nconst inputItem = $input.first();\n\nconsole.log('=== DECODE BASE64 ===');\nconsole.log('Input JSON keys:', Object.keys(inputItem.json));\nconsole.log('Input Binary keys:', Object.keys(inputItem.binary || {}));\n\n// Vérifier que les fichiers binaires sont présents\nif (!inputItem.binary || !inputItem.binary.pdf || !inputItem.binary.audio) {\n  console.error('❌ Fichiers binaires manquants !');\n  console.error('binary:', inputItem.binary);\n  throw new Error('Les fichiers PDF ou Audio sont manquants dans les données binaires');\n}\n\n// Les données sont déjà en Buffer depuis \"Préparer Upload Supabase\"\n// Pas besoin de décoder depuis base64 si c'est déjà un Buffer\nconst pdfData = inputItem.binary.pdf.data;\nconst audioData = inputItem.binary.audio.data;\n\nconsole.log('PDF data type:', typeof pdfData);\nconsole.log('Audio data type:', typeof audioData);\n\n// Si les données sont en base64 (string), les décoder\nlet pdfBuffer, audioBuffer;\n\nif (typeof pdfData === 'string') {\n  console.log('Décodage PDF depuis base64...');\n  pdfBuffer = Buffer.from(pdfData, 'base64');\n} else if (Buffer.isBuffer(pdfData)) {\n  console.log('PDF déjà en Buffer');\n  pdfBuffer = pdfData;\n} else {\n  throw new Error('Format PDF inconnu: ' + typeof pdfData);\n}\n\nif (typeof audioData === 'string') {\n  console.log('Décodage Audio depuis base64...');\n  audioBuffer = Buffer.from(audioData, 'base64');\n} else if (Buffer.isBuffer(audioData)) {\n  console.log('Audio déjà en Buffer');\n  audioBuffer = audioData;\n} else {\n  throw new Error('Format Audio inconnu: ' + typeof audioData);\n}\n\nconsole.log('PDF decoded size:', pdfBuffer.length, 'bytes');\nconsole.log('Audio decoded size:', audioBuffer.length, 'bytes');\n\n// Retourner avec les buffers bruts\nreturn [{\n  json: inputItem.json,\n  binary: {\n    pdf: {\n      data: pdfBuffer,\n      mimeType: 'application/pdf',\n      fileName: 'rapport.pdf'\n    },\n    audio: {\n      data: audioBuffer,\n      mimeType: 'audio/mpeg',\n      fileName: 'audio.mp3'\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        1008
+      ],
+      "id": "04e4e22a-a91a-447a-bba6-90bcf8987753",
+      "name": "Decode Base64"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://xottryrwoxafervpovex.supabase.co/storage/v1/object/rapports/{{ $json.pdf_path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/pdf"
+            },
+            {
+              "name": "x-upsert",
+              "value": "true"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "pdf",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1472,
+        832
+      ],
+      "id": "d9b3a333-2eb6-4b6e-ad1e-1dba4cdf4c2b",
+      "name": "Upload PDF Storage",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "zTXVdjBvmT0X0ACG",
+          "name": "supabase auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://xottryrwoxafervpovex.supabase.co/storage/v1/object/rapports/{{ $json.audio_path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "audio/mpeg"
+            },
+            {
+              "name": "x-upsert",
+              "value": "true"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "audio",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1472,
+        1184
+      ],
+      "id": "1255b4fc-4b55-4b24-8095-4154a5a6ab07",
+      "name": "Upload Audio Storage",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "zTXVdjBvmT0X0ACG",
+          "name": "supabase auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prepData = $('Préparer Upload Supabase').first().json;\n\n// Récupérer les 3 inputs du Merge2\nconst allItems = $input.all();\n\nconsole.log('=== MERGE2 INPUTS ===');\nconsole.log('Nombre d\\'items:', allItems.length);\n\n// Input 1 & 2 : Uploads (PDF/Audio)\nconst uploadPdfResponse = allItems[0];\nconst uploadAudioResponse = allItems[1];\n\n// Input 3 : Résumé\nlet resume = '';\nif (allItems.length >= 3) {\n  resume = allItems[2].json?.resume || '';\n  console.log('✅ Résumé récupéré depuis Merge2:', resume);\n} else {\n  console.warn('⚠️ Résumé manquant dans Merge2');\n}\n\nconst SUPABASE_URL = 'https://xottryrwoxafervpovex.supabase.co';\n\nconst pdfUrl = `${SUPABASE_URL}/storage/v1/object/public/rapports/${prepData.pdf_path}`;\nconst audioUrl = `${SUPABASE_URL}/storage/v1/object/public/rapports/${prepData.audio_path}`;\n\nconsole.log('=== URLS CONSTRUITES ===');\nconsole.log('PDF URL:', pdfUrl);\nconsole.log('Audio URL:', audioUrl);\nconsole.log('Résumé:', resume);\n\n// Helper pour convertir array en format PostgreSQL\nconst toPgArray = (arr) => {\n  if (!arr || !Array.isArray(arr)) return '{}';\n  const clean = arr.filter(Boolean);\n  if (!clean.length) return '{}';\n  return `{${clean.map(v => `\"${String(v).replace(/\"/g, '\\\\\"')}\"`).join(',')}}`;\n};\n\nconst titre = `Rapport de veille - ${prepData.secteur} - ${prepData.date}`;\nconst motsClesPg = toPgArray(prepData.mots_cles);\n\nreturn [{\n  json: {\n    client_id: prepData.client_id,\n    client_email: prepData.client_email,\n    titre: titre,\n    resume: resume,\n    pdf_url: pdfUrl,\n    audio_url: audioUrl,\n    nb_sources: prepData.nb_sources,\n    mots_cles: motsClesPg,\n    secteur: prepData.secteur\n  }\n}];\n\n// // ==================== CONSTRUIRE URLS - VERSION CORRIGÉE ====================\n\n// const prepData = $('Préparer Upload Supabase').first().json;\n// const uploadPdfResponse = $input.all()[0];\n// const uploadAudioResponse = $input.all()[1];\n\n// const SUPABASE_URL = 'https://xottryrwoxafervpovex.supabase.co';\n\n// const pdfUrl = `${SUPABASE_URL}/storage/v1/object/public/rapports/${prepData.pdf_path}`;\n// const audioUrl = `${SUPABASE_URL}/storage/v1/object/public/rapports/${prepData.audio_path}`;\n\n// console.log('=== URLS CONSTRUITES ===');\n// console.log('PDF URL:', pdfUrl);\n// console.log('Audio URL:', audioUrl);\n// console.log('client_id depuis prepData:', prepData.client_id);\n\n// // Helper pour convertir array en format PostgreSQL\n// const toPgArray = (arr) => {\n//   if (!arr || !Array.isArray(arr)) return '{}';\n//   const clean = arr.filter(Boolean);\n//   if (!clean.length) return '{}';\n//   return `{${clean.map(v => `\"${String(v).replace(/\"/g, '\\\\\"')}\"`).join(',')}}`;\n// };\n\n// const titre = `Rapport de veille - ${prepData.secteur} - ${prepData.date}`;\n// const motsClesPg = toPgArray(prepData.mots_cles);\n\n// // ⚠️ CORRECTION : Vérifier que client_id existe\n// if (!prepData.client_id) {\n//   console.error('❌ client_id manquant dans prepData !');\n//   console.error('prepData keys:', Object.keys(prepData));\n//   throw new Error('client_id est undefined dans Préparer Upload Supabase');\n// }\n\n// return [{\n//   json: {\n//     client_id: prepData.client_id,\n//     client_email: prepData.client_email,\n//     titre: titre,\n//     pdf_url: pdfUrl,\n//     audio_url: audioUrl,\n//     nb_sources: prepData.nb_sources,\n//     mots_cles: motsClesPg,\n//     secteur: prepData.secteur\n//   }\n// }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        1072
+      ],
+      "id": "26780a4b-63c7-4fc3-b083-bfddbf52e54b",
+      "name": "Construire URLs"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "rapports",
+          "mode": "list",
+          "cachedResultName": "rapports"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "envoye_par_email": false,
+            "client_id": "={{ $json.client_id }}",
+            "titre": "={{ $json.titre }}",
+            "resume": "={{ $json.resume }}",
+            "type_rapport": "veille_quotidienne",
+            "pdf_url": "={{ $json.pdf_url }}",
+            "audio_url": "={{ $json.audio_url }}",
+            "nb_sources": "={{ $json.nb_sources }}",
+            "mots_cles": "={{ \n  (() => {\n    const mc = $json.mots_cles;\n    \n    // Cas 1 : Déjà un array\n    if (Array.isArray(mc)) {\n      return mc.filter(Boolean);\n    }\n    \n    // Cas 2 : String format PostgreSQL \"{val1,val2}\"\n    if (typeof mc === 'string') {\n      const cleaned = mc\n        .replace(/^{|}$/g, '')           // Retirer { et }\n        .replace(/[\\\"]/g, '')             // Retirer guillemets\n        .split(',')                       // Split par virgule\n        .map(s => s.trim())               // Trim espaces\n        .filter(s => s.length > 0);       // Retirer vides\n      \n      return cleaned.length > 0 ? cleaned : [];\n    }\n    \n    // Cas 3 : Autre (null, undefined, etc.)\n    return [];\n  })()\n}}",
+            "secteur": "={{ $json.secteur }}",
+            "statut": "genere"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "client_id",
+              "displayName": "client_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "titre",
+              "displayName": "titre",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "date_generation",
+              "displayName": "date_generation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "type_rapport",
+              "displayName": "type_rapport",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "pdf_url",
+              "displayName": "pdf_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "audio_url",
+              "displayName": "audio_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nb_sources",
+              "displayName": "nb_sources",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mots_cles",
+              "displayName": "mots_cles",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "array",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "secteur",
+              "displayName": "secteur",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "statut",
+              "displayName": "statut",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "envoye_par_email",
+              "displayName": "envoye_par_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "date_envoi_email",
+              "displayName": "date_envoi_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "resume",
+              "displayName": "resume",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        2208,
+        896
+      ],
+      "id": "54b0ea11-7095-4ed2-ad93-b20060ffb374",
+      "name": "Insert Rapport DB",
+      "credentials": {
+        "postgres": {
+          "id": "qAtIAYuMkQS4QYXV",
+          "name": "Postgres account 5"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== COMBINER - DEBUG COMPLET ====================\n\nconst items = $input.all();\n\nconsole.log('=== COMBINER DEBUG ===');\nconsole.log('Nombre total d\\'items:', items.length);\n\n// Afficher chaque item\nitems.forEach((item, index) => {\n  console.log(`\\nItem ${index + 1}:`);\n  console.log('  JSON keys:', Object.keys(item.json || {}));\n  console.log('  Binary keys:', Object.keys(item.binary || {}));\n  \n  if (item.binary?.pdf) {\n    console.log('  → Contient PDF, size:', item.binary.pdf.data.length);\n  }\n  if (item.binary?.data) {\n    console.log('  → Contient data, size:', item.binary.data.data?.length || 'N/A');\n  }\n});\n\n// Identifier PDF et Audio\nlet pdfItem = null;\nlet audioItem = null;\n\nfor (const item of items) {\n  if (item.binary?.pdf) {\n    pdfItem = item;\n  }\n  if (item.binary?.data && !item.binary?.pdf) {\n    audioItem = item;\n  }\n}\n\nconsole.log('\\n=== RÉSULTAT ===');\nconsole.log('PDF trouvé:', !!pdfItem);\nconsole.log('Audio trouvé:', !!audioItem);\n\nif (!pdfItem) {\n  throw new Error('❌ PDF manquant ! Vérifier que Gotenberg PDF s\\'est bien exécuté.');\n}\n\nif (!audioItem) {\n  throw new Error('❌ Audio manquant ! Vérifier que Fish Audio s\\'est bien exécuté.');\n}\n\nreturn [{\n  json: {\n    client_id: pdfItem.json.client_id,\n    client_email: pdfItem.json.client_email\n  },\n  binary: {\n    pdf: pdfItem.binary.pdf,\n    audio: audioItem.binary.data\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1008
+      ],
+      "id": "20076e22-dedd-41d1-b8df-012497ed6087",
+      "name": "Combiner1"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1824,
+        1056
+      ],
+      "id": "c3d59789-6b66-48b0-820e-ef926e03bc1d",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== PRÉPARER EMAIL - VERSION FINALE CORRIGÉE ====================\n\n// Récupérer les 2 items du Merge3\nconst item1 = $input.first();\nconst item2 = $input.last();\n\nconsole.log('=== ITEMS REÇUS ===');\nconsole.log('Item 1:', JSON.stringify(item1.json, null, 2));\nconsole.log('Item 2:', JSON.stringify(item2.json, null, 2));\n\n// ⚠️ CORRECTION : Fusionner les .json, pas les items directement !\nconst data = {\n  ...item1.json,  // Contient client_id, pdf_url, audio_url, etc.\n  ...item2.json   // Contient email, prenom, email_destinataires, etc.\n};\n\nconsole.log('=== DONNÉES FUSIONNÉES ===');\nconsole.log('Clés disponibles:', Object.keys(data));\n\n// Récupérer les emails avec filtrage\nlet to = data.email_destinataires || [];\nif (!Array.isArray(to) || to.length === 0) {\n  const fallbackEmail = data.email || data.client_email;\n  if (fallbackEmail) {\n    to = [fallbackEmail];\n  }\n}\n\n// Filtrer les valeurs nulles/undefined\nto = Array.isArray(to) ? to.filter(email => email) : [];\nconst cc = Array.isArray(data.email_cc) ? data.email_cc.filter(email => email) : [];\n\nconsole.log('🔍 Debug destinataires:', {\n  email_destinataires: data.email_destinataires,\n  email: data.email,\n  client_email: data.client_email,\n  to_final: to\n});\n\nconsole.log('📧 To:', to);\nconsole.log('📋 CC:', cc);\n\n// Validation\nif (to.length === 0) {\n  throw new Error('Aucun destinataire trouvé. Vérifiez que email_destinataires, email ou client_email est renseigné.');\n}\n\n// Formater mots-clés\nlet motsClés = '';\nif (Array.isArray(data.mots_cles)) {\n  motsClés = data.mots_cles.join(', ');\n} else if (typeof data.mots_cles === 'string') {\n  motsClés = data.mots_cles.replace(/[{}\"]/g, '').split(',').map(s => s.trim()).join(', ');\n}\n\n// HTML Email (minifié sur une ligne)\nconst html = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>body{font-family:Arial,sans-serif;margin:0;padding:20px;background:#f5f5f5}.container{max-width:600px;margin:0 auto;background:white;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)}.header{background:linear-gradient(135deg,#667eea,#764ba2);color:white;padding:40px 20px;text-align:center}.header h1{margin:0;font-size:24px}.content{padding:40px 30px}.info{background:#f8f9fa;border-left:4px solid #667eea;padding:15px;margin:20px 0;border-radius:4px}.info p{margin:8px 0}.button{display:inline-block;padding:14px 28px;background:#667eea;color:white;text-decoration:none;border-radius:6px;margin:10px 8px}.button.secondary{background:#48bb78}.stats{text-align:center;margin:30px 0;padding:20px;background:#f8f9fa;border-radius:6px}.stat-number{font-size:36px;font-weight:bold;color:#667eea}.stat-label{font-size:14px;color:#666;margin-top:5px}.footer{padding:20px;text-align:center;font-size:13px;color:#999;background:#f8f9fa}ul{padding-left:20px}li{margin:10px 0}</style></head><body><div class=\"container\"><div class=\"header\"><h1>📊 ' + (data.titre || 'Rapport de veille') + '</h1></div><div class=\"content\"><p>Bonjour ' + (data.prenom || 'cher client') + ' 👋</p><p>Votre rapport de veille est prêt ! Découvrez les dernières actualités et tendances de votre secteur.</p><div class=\"stats\"><div class=\"stat-number\">' + (data.nb_sources || 0) + '</div><div class=\"stat-label\">Sources analysées</div></div><div class=\"info\"><p><strong>📌 Secteur:</strong> ' + (data.secteur || 'Non spécifié') + '</p>' + (motsClés ? '<p><strong>🔍 Mots-clés:</strong> ' + motsClés + '</p>' : '') + '</div><p><strong>📋 Contenu du rapport:</strong></p><ul><li>📄 Analyse complète des actualités</li><li>🎯 Insights sur vos concurrents</li><li>📈 Tendances du marché</li>' + (data.audio_url ? '<li>🎧 Version audio disponible</li>' : '') + '</ul><p style=\"text-align:center;margin:35px 0\"><a href=\"' + (data.pdf_url || '#') + '\" class=\"button\">📥 Télécharger le PDF</a>' + (data.audio_url ? '<a href=\"' + data.audio_url + '\" class=\"button secondary\">🎧 Écouter l\\'audio</a>' : '') + '</p><p style=\"margin-top:30px;font-size:14px;color:#666\">💡 <em>Conseil:</em> Consultez ce rapport régulièrement pour rester à la pointe de votre marché.</p></div><div class=\"footer\"><p>Email envoyé automatiquement par votre système de veille concurrentielle.</p><p style=\"margin-top:10px\">© ' + new Date().getFullYear() + ' Tous droits réservés.</p></div></div></body></html>';\n\n// Version texte\nconst text = (data.titre || 'Rapport de veille') + '\\n\\nBonjour ' + (data.prenom || 'cher client') + ',\\n\\nVotre rapport de veille est prêt !\\n\\n📊 ' + (data.nb_sources || 0) + ' sources analysées\\n📌 Secteur: ' + (data.secteur || 'Non spécifié') + '\\n' + (motsClés ? '🔍 Mots-clés: ' + motsClés + '\\n' : '') + '\\n📥 PDF: ' + (data.pdf_url || 'N/A') + '\\n' + (data.audio_url ? '🎧 Audio: ' + data.audio_url : '') + '\\n\\n---\\nEmail automatique - Système de veille concurrentielle';\n\nconsole.log('✅ Email préparé avec succès');\n\nreturn [{\n  json: {\n    to: to,\n    cc: cc,\n    subject: data.titre || 'Votre rapport de veille',\n    html: html,\n    text: text,\n    attachments: []\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        1072
+      ],
+      "id": "dff37a9c-1f6f-4725-90ea-9d56894081ef",
+      "name": "prepare_email"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://xottryrwoxafervpovex.supabase.co/functions/v1/send-email-veille",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ \n  {\n    \"to\": $json.to,\n    \"cc\": $json.cc || [],\n    \"subject\": $json.subject,\n    \"html\": $json.html,\n    \"text\": $json.text,\n    \"attachments\": $json.attachments || []\n  } \n}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2912,
+        1072
+      ],
+      "id": "d3b4ac8c-87ea-4d0e-90ab-5fe774deebd4",
+      "name": "HTTP Request2",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "e2PnafSFOO5cuNvj",
+          "name": "edgeFunction"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  email,\n  prenom,\n  email_destinataires,\n  email_cc,\n  secteur,\n  mots_cles\nFROM public.clients \nWHERE id = '{{ $json.client_id }}'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        2176,
+        1216
+      ],
+      "id": "36a4dbcb-5691-4bb9-af1b-8974d4c7f6ec",
+      "name": "Get Client Info",
+      "credentials": {
+        "postgres": {
+          "id": "qAtIAYuMkQS4QYXV",
+          "name": "Postgres account 5"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2368,
+        1072
+      ],
+      "id": "77925750-5ada-43a0-bdcb-02f19a8be7b9",
+      "name": "Merge3"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://a494f518f383.ngrok-free.app/forms/chromium/convert/html",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "Gotenberg-Output-Filename",
+              "value": "=Rapport_Veille_{{ $now.toISO().split('T')[0] }}.pdf"
+            },
+            {
+              "name": "paperWidth",
+              "value": "8.27"
+            },
+            {
+              "name": "paperHeight",
+              "value": "11.69"
+            },
+            {
+              "name": "marginTop",
+              "value": "0.5"
+            },
+            {
+              "name": "marginBottom",
+              "value": "0.5"
+            },
+            {
+              "name": "marginLeft",
+              "value": "0.28"
+            },
+            {
+              "name": "marginRight",
+              "value": "0.3"
+            },
+            {
+              "name": "printBackground",
+              "value": "true"
+            },
+            {
+              "name": "fit-to-page",
+              "value": "true"
+            },
+            {
+              "name": "scale",
+              "value": "0.65"
+            },
+            {}
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "data",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "pdf"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -176,
+        912
+      ],
+      "id": "4fa253e6-5b6e-4847-ad07-05ef2259234a",
+      "name": "Gotenberg - PDF1"
+    },
+    {
+      "parameters": {
+        "model": "grok-4-fast-reasoning",
+        "options": {
+          "maxTokens": 200
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        1488
+      ],
+      "id": "c152f1e0-9591-4424-9334-e714a1b999d4",
+      "name": "Grok HTML1",
+      "credentials": {
+        "xAiApi": {
+          "id": "xR0cDwxWRWiGZdNG",
+          "name": "xAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Génère un résumé court et percutant (4 phrases maximum, 150 caractères max) qui donne envie de lire le rapport complet. Le résumé doit être informatif et professionnel.\n\nFormat : Un seul paragraphe court, sans titre.\n\nLe rapport est ici :\n\n{{ $json.html }}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        -288,
+        1296
+      ],
+      "id": "2278394c-423e-4f28-8237-805e37421227",
+      "name": "Générer résumé"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== NETTOYER RÉSUMÉ ====================\n\nconst inputItem = $input.first();\n\n// Extraire le résumé depuis la réponse de l'AI\nlet resume = (inputItem.json?.text || inputItem.json?.message?.content || inputItem.json?.output || '').trim();\n\nconsole.log('=== NETTOYER RÉSUMÉ ===');\nconsole.log('Résumé brut:', resume);\n\n// Nettoyer le résumé\nresume = resume\n  .replace(/^[\"']|[\"']$/g, '')  // Retirer guillemets début/fin\n  .replace(/\\n/g, ' ')          // Remplacer retours à la ligne\n  .replace(/\\s{2,}/g, ' ')      // Multiple espaces → un seul\n  .trim();\n\n// Limiter à 150 caractères\nif (resume.length > 150) {\n  resume = resume.substring(0, 147) + '...';\n}\n\nconsole.log('Résumé nettoyé:', resume);\nconsole.log('Longueur:', resume.length);\n\n// Récupérer client_id depuis Nettoyer HTML\nconst htmlData = $('Nettoyer HTML').first().json;\n\nreturn [{\n  json: {\n    resume: resume,\n    client_id: htmlData.client_id,\n    client_email: htmlData.client_email\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        1312
+      ],
+      "id": "ef4854ff-b49b-4101-9336-1c25c299b23a",
+      "name": "nettoyer resume"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.rapports\nSET \n  envoye_par_email = true,\n  date_envoi_email = NOW()\nWHERE id = '{{ $('Insert Rapport DB').first().json.id }}'\n  AND envoye_par_email = false\nRETURNING *",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3120,
+        1072
+      ],
+      "id": "741b41c9-2d5e-44f3-a4cd-20ab50810be7",
+      "name": "Execute a SQL query",
+      "credentials": {
+        "postgres": {
+          "id": "qAtIAYuMkQS4QYXV",
+          "name": "Postgres account 5"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Get Clients Supabase": {
+      "main": [
+        [
+          {
+            "node": "Filtrer Fréquence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrer Fréquence": {
+      "main": [
+        [
+          {
+            "node": "Générer Requêtes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Générer Requêtes": {
+      "main": [
+        [
+          {
+            "node": "Serper Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Serper Search": {
+      "main": [
+        [
+          {
+            "node": "Agréger Résultats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Serper Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agréger Résultats": {
+      "main": [
+        [
+          {
+            "node": "Générer HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grok HTML": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Générer HTML",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Générer HTML": {
+      "main": [
+        [
+          {
+            "node": "Nettoyer HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nettoyer HTML": {
+      "main": [
+        [
+          {
+            "node": "HTML → Binaire",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Générer résumé",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML → Binaire": {
+      "main": [
+        [
+          {
+            "node": "Gotenberg - PDF1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grok Audio": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Générer Audio",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Générer Audio": {
+      "main": [
+        [
+          {
+            "node": "Nettoyer Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nettoyer Audio": {
+      "main": [
+        [
+          {
+            "node": "Fish Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fish Audio": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger1": {
+      "main": [
+        [
+          {
+            "node": "Get Clients Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Combiner1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer Upload Supabase": {
+      "main": [
+        [
+          {
+            "node": "Decode Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode Base64": {
+      "main": [
+        [
+          {
+            "node": "Upload Audio Storage",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upload PDF Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload PDF Storage": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Audio Storage": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Construire URLs": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Client Info",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Insert Rapport DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Rapport DB": {
+      "main": [
+        []
+      ]
+    },
+    "Combiner1": {
+      "main": [
+        [
+          {
+            "node": "Préparer Upload Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Construire URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "prepare_email": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Client Info": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge3": {
+      "main": [
+        [
+          {
+            "node": "prepare_email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gotenberg - PDF1": {
+      "main": [
+        [
+          {
+            "node": "Générer Audio",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Grok HTML1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Générer résumé",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Générer résumé": {
+      "main": [
+        [
+          {
+            "node": "nettoyer resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "nettoyer resume": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "1be4aeb2bb571a73064575446cea62ab21cb66261219a5951c177b0b0485e798"
+  }
+}

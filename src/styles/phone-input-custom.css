@@ -1,0 +1,79 @@
+/* Customisation du PhoneInput pour correspondre au design orange/coral */
+
+/* Container principal - ajouter espacement */
+.react-international-phone-input-container {
+  display: flex !important;
+  gap: 8px !important;
+  width: 100% !important;
+}
+
+/* Bouton de sélection de pays */
+.react-international-phone-country-selector-button {
+  border-radius: 8px !important;
+  margin-right: 0 !important;
+}
+
+/* Input du numéro */
+.react-international-phone-input {
+  border-radius: 8px !important;
+  margin-left: 0 !important;
+}
+
+/* Focus state avec couleur orange */
+.react-international-phone-input-container .react-international-phone-input:focus {
+  outline: none;
+  border-color: #f97316 !important;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2) !important;
+}
+
+/* Bouton de sélection de pays - focus */
+.react-international-phone-country-selector-button:focus {
+  outline: none;
+  border-color: #f97316 !important;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2) !important;
+}
+
+/* Dropdown list */
+.react-international-phone-country-selector-dropdown {
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+  max-height: 300px !important;
+}
+
+/* Hover sur les options de pays */
+.react-international-phone-country-selector-dropdown__list-item:hover {
+  background-color: #fff7ed !important;
+}
+
+/* Option sélectionnée */
+.react-international-phone-country-selector-dropdown__list-item--selected {
+  background-color: #fed7aa !important;
+  color: #9a3412 !important;
+  font-weight: 500;
+}
+
+/* Focus sur une option */
+.react-international-phone-country-selector-dropdown__list-item:focus {
+  background-color: #ffedd5 !important;
+  outline: none;
+}
+
+/* Scrollbar custom pour la liste des pays */
+.react-international-phone-country-selector-dropdown__list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.react-international-phone-country-selector-dropdown__list::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 4px;
+}
+
+.react-international-phone-country-selector-dropdown__list::-webkit-scrollbar-thumb {
+  background: #f97316;
+  border-radius: 4px;
+}
+
+.react-international-phone-country-selector-dropdown__list::-webkit-scrollbar-thumb:hover {
+  background: #ea580c;
+}

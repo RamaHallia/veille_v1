@@ -1,0 +1,308 @@
+{
+  "name": "RAG - Query (Webhook)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "/rag-query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook RAG Query",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "rag-query-webhook-id"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== VALIDATION INPUT ====================\nconst body = $input.first().json.body;\n\nconst question = body.question || body.query || body.q;\nconst userId = body.user_id;\n\nif (!question) {\n  throw new Error('❌ question is required');\n}\n\nif (!userId) {\n  throw new Error('❌ user_id is required');\n}\n\nconsole.log('=== RAG QUERY ===');\nconsole.log('User ID:', userId);\nconsole.log('Question:', question);\n\nreturn [{\n  json: {\n    question: question.trim(),\n    user_id: userId\n  }\n}];"
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id as client_id\nFROM public.clients\nWHERE user_id = '{{ $json.user_id }}'\nLIMIT 1",
+        "options": {}
+      },
+      "id": "get-client",
+      "name": "Get Client ID",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        640,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VOTRE_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"text-embedding-3-large\",\n  \"input\": {{ JSON.stringify($('Validate Input').item.json.question) }}\n}",
+        "options": {}
+      },
+      "id": "create-question-embedding",
+      "name": "Create Question Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VOTRE_OPENAI_HEADER_AUTH_ID",
+          "name": "OpenAI Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== PRÉPARER LA RECHERCHE ====================\nconst embedding = $input.first().json.data[0].embedding;\nconst clientId = $('Get Client ID').item.json.client_id;\nconst question = $('Validate Input').item.json.question;\n\nif (!embedding || embedding.length === 0) {\n  throw new Error('❌ Failed to create embedding');\n}\n\nconsole.log(`✅ Embedding created: ${embedding.length} dimensions`);\nconsole.log(`🔍 Searching for client: ${clientId}`);\n\n// Formater l'embedding pour PostgreSQL\nconst embeddingStr = '[' + embedding.join(',') + ']';\n\nreturn [{\n  json: {\n    client_id: clientId,\n    question: question,\n    embedding: embeddingStr\n  }\n}];"
+      },
+      "id": "prepare-search",
+      "name": "Prepare Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT\n  rc.id,\n  rc.rapport_id,\n  rc.content,\n  rc.chunk_index,\n  r.titre,\n  r.date_generation::text as date,\n  1 - (rc.embedding <=> '{{ $json.embedding }}'::vector(3072)) as similarity\nFROM public.rapport_chunks rc\nJOIN public.rapports r ON rc.rapport_id = r.id\nWHERE r.client_id = '{{ $json.client_id }}'\n  AND 1 - (rc.embedding <=> '{{ $json.embedding }}'::vector(3072)) > 0.5\nORDER BY rc.embedding <=> '{{ $json.embedding }}'::vector(3072)\nLIMIT 10",
+        "options": {}
+      },
+      "id": "search-chunks",
+      "name": "Search Chunks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1240,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VOTRE_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== CONSTRUIRE LE CONTEXTE ====================\nconst chunks = $input.all();\nconst question = $('Validate Input').item.json.question;\n\nconsole.log(`📚 Found ${chunks.length} relevant chunks`);\n\nif (chunks.length === 0) {\n  return [{\n    json: {\n      question: question,\n      context: 'Aucun document pertinent trouvé dans votre base de veille.',\n      sources: [],\n      found_chunks: 0\n    }\n  }];\n}\n\n// Construire le contexte\nlet context = 'DOCUMENTS PERTINENTS :\\n\\n';\nconst sources = [];\nconst seenRapports = new Set();\n\nchunks.forEach((chunk, index) => {\n  const similarity = Math.round(chunk.json.similarity * 100);\n  context += `--- Document ${index + 1} (${similarity}% pertinent) ---\\n`;\n  context += `Titre: ${chunk.json.titre}\\n`;\n  context += `Date: ${chunk.json.date}\\n`;\n  context += `Contenu: ${chunk.json.content}\\n\\n`;\n\n  // Ajouter aux sources (sans doublons)\n  if (!seenRapports.has(chunk.json.rapport_id)) {\n    seenRapports.add(chunk.json.rapport_id);\n    sources.push({\n      titre: chunk.json.titre,\n      date: chunk.json.date,\n      excerpt: chunk.json.content.substring(0, 200) + '...'\n    });\n  }\n});\n\nconsole.log(`📄 Unique sources: ${sources.length}`);\n\nreturn [{\n  json: {\n    question: question,\n    context: context,\n    sources: sources,\n    found_chunks: chunks.length\n  }\n}];"
+      },
+      "id": "build-context",
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "grok-2-latest",
+        "options": {
+          "maxTokens": 2000,
+          "temperature": 0.3
+        }
+      },
+      "id": "llm-grok",
+      "name": "xAI Grok Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [
+        1720,
+        440
+      ],
+      "credentials": {
+        "xAiApi": {
+          "id": "VOTRE_XAI_CREDENTIAL_ID",
+          "name": "xAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Tu es un assistant expert en veille concurrentielle et analyse de marché.\n\nCONTEXTE UTILISATEUR :\nVoici les documents de veille les plus pertinents trouvés dans la base de données :\n\n{{ $json.context }}\n\nQUESTION DE L'UTILISATEUR :\n{{ $json.question }}\n\nINSTRUCTIONS :\n1. Réponds à la question en te basant UNIQUEMENT sur les documents fournis ci-dessus\n2. Si les documents ne contiennent pas l'information, dis-le clairement\n3. Cite les sources (titres des rapports) quand tu utilises une information\n4. Structure ta réponse de manière claire avec :\n   - Un résumé en 2-3 phrases\n   - Les points clés numérotés\n   - Des insights ou tendances identifiées\n5. Utilise un ton professionnel mais accessible\n6. Si plusieurs documents disent des choses différentes, mentionne les différentes perspectives\n\nRÉPONDS EN FRANÇAIS :",
+        "options": {}
+      },
+      "id": "agent-rag",
+      "name": "RAG Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.6,
+      "position": [
+        1640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== FORMATER LA RÉPONSE ====================\nconst agentOutput = $input.first().json;\nconst sources = $('Build Context').item.json.sources;\nconst foundChunks = $('Build Context').item.json.found_chunks;\n\nconst answer = agentOutput.output || agentOutput.text || agentOutput.response || \"Je n'ai pas pu générer une réponse.\";\n\nconsole.log('✅ Answer generated');\nconsole.log(`📊 Using ${foundChunks} chunks from ${sources.length} sources`);\n\nreturn [{\n  json: {\n    answer: answer,\n    sources: sources,\n    metadata: {\n      chunks_found: foundChunks,\n      sources_count: sources.length,\n      timestamp: new Date().toISOString()\n    }\n  }\n}];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2040,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook RAG Query": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Get Client ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Client ID": {
+      "main": [
+        [
+          {
+            "node": "Create Question Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Question Embedding": {
+      "main": [
+        [
+          {
+            "node": "Prepare Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Search": {
+      "main": [
+        [
+          {
+            "node": "Search Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Chunks": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "RAG Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "llm-grok": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "RAG Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Agent": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}

@@ -1,0 +1,163 @@
+{
+  "name": "RAG - Indexation Auto (Version Simplifiée avec Edge Function)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Toutes les 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "notes": "Vérifie toutes les 5 minutes s'il y a des rapports à indexer"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  id,\n  titre,\n  client_id,\n  date_generation\nFROM public.rapports\nWHERE \n  (indexe_rag IS NULL OR indexe_rag = false)\n  AND (contenu_html IS NOT NULL OR resume IS NOT NULL)\nORDER BY date_generation DESC\nLIMIT 10",
+        "options": {}
+      },
+      "id": "get-rapports-to-index",
+      "name": "Récupérer rapports non indexés",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [440, 300],
+      "credentials": {
+        "postgres": {
+          "id": "VOTRE_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      },
+      "notes": "Récupère les rapports qui ont du contenu mais ne sont pas indexés"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-rapports",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-if-rapports",
+      "name": "Y a-t-il des rapports ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/functions/v1/index-rapport",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"rapport_id\": \"{{ $json.id }}\"\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "call-edge-function",
+      "name": "Appeler Edge Function index-rapport",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "VOTRE_SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase API"
+        }
+      },
+      "notes": "Appelle l'Edge Function qui gère tout : extraction HTML, chunking, embeddings, insertion"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Résumé de l'indexation\nconst items = $input.all();\n\nconst successes = items.filter(i => i.json.success === true);\nconst errors = items.filter(i => i.json.success !== true);\n\nconst totalChunks = successes.reduce((sum, i) => sum + (i.json.chunks_created || 0), 0);\n\nconsole.log('\\n='.repeat(50));\nconsole.log('✅ INDEXATION TERMINÉE');\nconsole.log('='.repeat(50));\nconsole.log(`📄 Rapports indexés: ${successes.length}/${items.length}`);\nconsole.log(`📦 Total chunks créés: ${totalChunks}`);\n\nif (errors.length > 0) {\n  console.log(`\\n❌ Erreurs: ${errors.length}`);\n  errors.forEach(e => {\n    console.log(`  - ${e.json.error || 'Unknown error'}`);\n  });\n}\n\nreturn [{\n  json: {\n    success: true,\n    rapports_indexed: successes.length,\n    rapports_failed: errors.length,\n    total_chunks: totalChunks,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "summary",
+      "name": "Résumé",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log('⏭️ Aucun rapport à indexer pour le moment');\n\nreturn [{\n  json: {\n    success: true,\n    message: 'Aucun rapport à indexer',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "no-rapports",
+      "name": "Aucun rapport",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 400]
+    }
+  ],
+  "connections": {
+    "Toutes les 5 minutes": {
+      "main": [[{
+        "node": "Récupérer rapports non indexés",
+        "type": "main",
+        "index": 0
+      }]]
+    },
+    "Récupérer rapports non indexés": {
+      "main": [[{
+        "node": "Y a-t-il des rapports ?",
+        "type": "main",
+        "index": 0
+      }]]
+    },
+    "Y a-t-il des rapports ?": {
+      "main": [
+        [{
+          "node": "Appeler Edge Function index-rapport",
+          "type": "main",
+          "index": 0
+        }],
+        [{
+          "node": "Aucun rapport",
+          "type": "main",
+          "index": 0
+        }]
+      ]
+    },
+    "Appeler Edge Function index-rapport": {
+      "main": [[{
+        "node": "Résumé",
+        "type": "main",
+        "index": 0
+      }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-11-13T00:00:00.000Z",
+  "versionId": "1"
+}

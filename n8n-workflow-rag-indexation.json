@@ -1,0 +1,296 @@
+{
+  "name": "RAG - Indexation Auto (Toutes les 2 min)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/2 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Toutes les 2 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  r.id as rapport_id,\n  r.client_id,\n  r.titre,\n  r.contenu,\n  r.date_generation\nFROM public.rapports r\nWHERE r.contenu IS NOT NULL\n  AND r.contenu != ''\n  AND NOT EXISTS (\n    SELECT 1 FROM public.rapport_chunks rc\n    WHERE rc.rapport_id = r.id\n  )\nLIMIT 5",
+        "options": {}
+      },
+      "id": "get-rapports-to-index",
+      "name": "Get Rapports à indexer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VOTRE_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-rapports",
+              "leftValue": "={{ $json.rapport_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-if-rapports",
+      "name": "Rapports à indexer ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== CHUNKING DU CONTENU ====================\nconst items = $input.all();\nconst allChunks = [];\n\nfor (const item of items) {\n  const rapportId = item.json.rapport_id;\n  const clientId = item.json.client_id;\n  const titre = item.json.titre;\n  const contenu = item.json.contenu || '';\n  const dateGeneration = item.json.date_generation;\n\n  console.log(`📄 Processing rapport: ${titre}`);\n  console.log(`📏 Content length: ${contenu.length} characters`);\n\n  // Configuration du chunking\n  const CHUNK_SIZE = 1000;  // Taille du chunk en caractères\n  const CHUNK_OVERLAP = 200; // Overlap entre les chunks\n\n  // Nettoyer le contenu\n  const cleanContent = contenu\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  // Diviser en chunks\n  const chunks = [];\n  let position = 0;\n\n  while (position < cleanContent.length) {\n    const end = Math.min(position + CHUNK_SIZE, cleanContent.length);\n    let chunkText = cleanContent.substring(position, end);\n\n    // Essayer de couper sur une phrase complète\n    if (end < cleanContent.length) {\n      const lastPeriod = chunkText.lastIndexOf('.');\n      const lastNewline = chunkText.lastIndexOf('\\n');\n      const cutPoint = Math.max(lastPeriod, lastNewline);\n      \n      if (cutPoint > CHUNK_SIZE / 2) {\n        chunkText = chunkText.substring(0, cutPoint + 1);\n        position += cutPoint + 1;\n      } else {\n        position += CHUNK_SIZE - CHUNK_OVERLAP;\n      }\n    } else {\n      position = cleanContent.length;\n    }\n\n    chunks.push(chunkText.trim());\n  }\n\n  console.log(`✂️ Created ${chunks.length} chunks`);\n\n  // Créer les objets chunks\n  chunks.forEach((chunk, index) => {\n    allChunks.push({\n      json: {\n        rapport_id: rapportId,\n        client_id: clientId,\n        titre: titre,\n        date_generation: dateGeneration,\n        chunk_index: index,\n        content: chunk,\n        total_chunks: chunks.length\n      }\n    });\n  });\n}\n\nconsole.log(`📦 Total chunks created: ${allChunks.length}`);\n\nif (allChunks.length === 0) {\n  throw new Error('⚠️ No chunks created');\n}\n\nreturn allChunks;"
+      },
+      "id": "chunking",
+      "name": "Chunking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "text",
+        "operation": "message",
+        "modelId": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=Crée un embedding pour ce texte (ne réponds rien, juste l'embedding):\n\n{{ $json.content }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-embeddings",
+      "name": "Create Embeddings OpenAI",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [
+        1040,
+        200
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "VOTRE_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"text-embedding-3-large\",\n  \"input\": {{ JSON.stringify($json.content) }}\n}",
+        "options": {}
+      },
+      "id": "create-embeddings-api",
+      "name": "Create Embeddings API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VOTRE_OPENAI_HEADER_AUTH_ID",
+          "name": "OpenAI Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== PRÉPARER L'INSERTION ====================\nconst items = $input.all();\nconst preparedData = [];\n\nfor (const item of items) {\n  const embedding = item.json.data?.[0]?.embedding || [];\n  \n  if (!embedding || embedding.length === 0) {\n    console.error('❌ No embedding found for chunk:', item.json.chunk_index);\n    continue;\n  }\n\n  console.log(`✅ Embedding dimensions: ${embedding.length}`);\n\n  // Formater l'embedding pour PostgreSQL\n  const embeddingStr = '[' + embedding.join(',') + ']';\n\n  preparedData.push({\n    json: {\n      rapport_id: item.json.rapport_id,\n      content: item.json.content,\n      chunk_index: item.json.chunk_index,\n      embedding: embeddingStr,\n      titre: item.json.titre,\n      date_generation: item.json.date_generation\n    }\n  });\n}\n\nconsole.log(`📊 Prepared ${preparedData.length} chunks for insertion`);\n\nreturn preparedData;"
+      },
+      "id": "prepare-insertion",
+      "name": "Prepare Insertion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO public.rapport_chunks (\n  rapport_id,\n  content,\n  chunk_index,\n  embedding\n)\nVALUES (\n  '{{ $json.rapport_id }}',\n  {{ $json.content ? \"'\" + $json.content.replace(/'/g, \"''\") + \"'\" : \"NULL\" }},\n  {{ $json.chunk_index }},\n  '{{ $json.embedding }}'::vector(3072)\n)\nON CONFLICT (rapport_id, chunk_index) \nDO UPDATE SET\n  content = EXCLUDED.content,\n  embedding = EXCLUDED.embedding,\n  updated_at = NOW()\nRETURNING id",
+        "options": {}
+      },
+      "id": "insert-chunks",
+      "name": "Insert Chunks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1440,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VOTRE_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================== RÉSUMÉ DE L'INDEXATION ====================\nconst items = $input.all();\nconst totalInserted = items.length;\n\nconst rapportIds = [...new Set(items.map(i => $node[\"Chunking\"].json.rapport_id))];\nconst totalRapports = rapportIds.length;\n\nconsole.log('✅ INDEXATION TERMINÉE');\nconsole.log(`📄 Rapports indexés: ${totalRapports}`);\nconsole.log(`📦 Total chunks insérés: ${totalInserted}`);\n\nreturn [{\n  json: {\n    success: true,\n    rapports_indexed: totalRapports,\n    chunks_inserted: totalInserted,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "summary",
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log('⏭️ Aucun rapport à indexer pour le moment');\n\nreturn [{\n  json: {\n    success: true,\n    message: 'No reports to index',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "no-rapports",
+      "name": "No Rapports",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Toutes les 2 minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Rapports à indexer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Rapports à indexer": {
+      "main": [
+        [
+          {
+            "node": "Rapports à indexer ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rapports à indexer ?": {
+      "main": [
+        [
+          {
+            "node": "Chunking",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Rapports",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunking": {
+      "main": [
+        [
+          {
+            "node": "Create Embeddings API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Embeddings API": {
+      "main": [
+        [
+          {
+            "node": "Prepare Insertion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Insertion": {
+      "main": [
+        [
+          {
+            "node": "Insert Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Chunks": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}

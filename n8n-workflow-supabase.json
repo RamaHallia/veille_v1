@@ -1,0 +1,326 @@
+{
+  "name": "VeilleAI Pro - Onboarding CORRIGÉ",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "/AgentIA",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [200, 300],
+      "id": "webhook-entry",
+      "name": "Webhook - Entrée Utilisateur",
+      "webhookId": "cabc2188-ca26-43f8-9b3d-2ae31eee32b6"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n  EXISTS(SELECT 1 FROM public.clients WHERE user_id = '{{ $json.body.user_id }}') AS client_exists,\n  (SELECT row_to_json(c) FROM public.clients c WHERE user_id = '{{ $json.body.user_id }}' LIMIT 1) AS client",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [400, 300],
+      "id": "search-client",
+      "name": "Search Client in Supabase",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "supabase-postgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "check-exists",
+              "leftValue": "={{ $json.client_exists }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [600, 300],
+      "id": "check-exists",
+      "name": "Client existe ?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO public.clients (user_id, status_onboarding, created_at)\nVALUES ('{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}', 'in_progress', NOW())\nRETURNING *",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [800, 450],
+      "id": "create-client",
+      "name": "Create Client",
+      "credentials": {
+        "postgres": {
+          "id": "supabase-postgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE public.clients \nSET updated_at = NOW() \nWHERE user_id = '{{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}'\nRETURNING *",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [800, 150],
+      "id": "update-timestamp",
+      "name": "Update Timestamp",
+      "credentials": {
+        "postgres": {
+          "id": "supabase-postgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normaliser input pour l'agent\nconst body = $json.body || {};\nconst message = body.message || \"\";\nconst userId = body.user_id || \"user_default\";\n\nreturn [{\n  json: {\n    message: {\n      text: message,\n      from: { id: userId },\n      chat: { id: userId }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300],
+      "id": "normalize-input",
+      "name": "Normaliser Input"
+    },
+    {
+      "parameters": {
+        "model": "grok-4-fast-reasoning",
+        "options": {
+          "maxTokens": 25000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [1200, 500],
+      "id": "grok-model",
+      "name": "xAI Grok",
+      "credentials": {
+        "xAiApi": {
+          "id": "xai-credentials",
+          "name": "xAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook - Entrée Utilisateur').item.json.body.user_id }}",
+        "contextWindowLength": 30
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [1200, 650],
+      "id": "memory",
+      "name": "Memory"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Tu es un assistant conversationnel intelligent pour configurer une veille concurrentielle.\n\nMessage utilisateur : {{ $('Webhook - Entrée Utilisateur').item.json.body.message }}\n\n🎯 MISSION : Guider l'utilisateur à travers 10 étapes.\n\nÉTAPES :\n1. Prénom + Email\n2. Secteur\n3. Mots-clés (3-5)\n4. Concurrents (3-10)\n5. Profils LinkedIn\n6. Sources RSS (max 4)\n7. Fréquence\n8. Heure d'envoi\n9. Canaux\n10. Alertes temps réel\n\nRÈGLES :\n- Ton naturel et conversationnel\n- Emojis autorisés\n- Valide chaque étape\n- Permet retours en arrière\n- JSON structuré TOUJOURS\n\nFORMAT RÉPONSE :\n```json\n{\n  \"message_utilisateur\": \"Ton message ici\",\n  \"config\": {\n    \"route\": \"onboarding\" ou \"completed\",\n    \"status\": \"next_step\" ou \"done\",\n    \"etape_actuelle\": 1-10,\n    \"prenom\": \"...\",\n    \"email\": \"...\",\n    \"secteur\": \"...\",\n    \"Mots clés\": [\"...\", \"...\"],\n    \"concurrents\": [\"...\"],\n    \"profiles_linkedin\": [\"...\"],\n    \"sources_veille\": [\"...\"],\n    \"frequence\": \"quotidienne\",\n    \"heure_envoi\": \"08:00\",\n    \"canaux_diffusion\": [\"email\"],\n    \"alertes_temps_reel\": false,\n    \"etapes_validees\": [1, 2]\n  }\n}\n```\n\nSi étape 10 validée : route = \"completed\" + status = \"done\"",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [1200, 300],
+      "id": "ai-agent",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parser réponse agent\nconst raw = $json.output ?? $json.text ?? $json.message ?? \"\";\nlet clean = String(raw).trim();\n\n// Extraire JSON\nconst fenced = /```json([\\s\\S]*?)```/i.exec(clean) || /```([\\s\\S]*?)```/i.exec(clean);\nif (fenced) clean = fenced[1].trim();\n\nlet parsed = {};\ntry { \n  parsed = JSON.parse(clean); \n} catch (e) { \n  console.error('Parse error:', e);\n  parsed = {}; \n}\n\nlet message_utilisateur = parsed.message_utilisateur || \"Configuration en cours...\";\nlet config = parsed.config || {};\n\n// Email detection\nfunction extractEmail(text) {\n  if (!text) return null;\n  const match = String(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);\n  return match ? match[0].toLowerCase() : null;\n}\n\nconst webhook = $items(\"Webhook - Entrée Utilisateur\", 0, 0)?.json || {};\nconst body = webhook.body || {};\nconst searchResult = $items(\"Search Client in Supabase\", 0, 0)?.json || {};\nconst existingClient = searchResult.client || {};\n\n// Priorité email\nlet email = \n  config.email ||\n  body.email ||\n  existingClient.email ||\n  extractEmail(raw) ||\n  extractEmail(clean) ||\n  null;\n\nif (email) config.email = email;\n\n// Limiter arrays\nconst toArray = v => Array.isArray(v) ? v : (v ? [v] : []);\n\nif (config.sources_veille) {\n  config.sources_veille = toArray(config.sources_veille).slice(0, 4);\n}\n\nif (config[\"Mots clés\"] || config.mots_cles) {\n  const mots = toArray(config[\"Mots clés\"] || config.mots_cles).slice(0, 5);\n  config[\"Mots clés\"] = mots;\n  config.mots_cles = mots;\n}\n\nif (config.concurrents) {\n  config.concurrents = toArray(config.concurrents).slice(0, 10);\n}\n\nreturn [{\n  json: {\n    message_utilisateur,\n    config\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 300],
+      "id": "parse-response",
+      "name": "Parser Réponse"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.config.route }}",
+                    "rightValue": "onboarding",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "onboarding"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.config.route }}",
+                    "rightValue": "completed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "completed"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1600, 300],
+      "id": "router",
+      "name": "Router"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"output\": $json.message_utilisateur, \"config\": $json.config } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1800, 200],
+      "id": "respond-onboarding",
+      "name": "Répondre Onboarding"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Préparer données Supabase\nconst cfg = $json.config || {};\nconst webhook = $items('Webhook - Entrée Utilisateur', 0, 0)?.json?.body || {};\n\n// Helpers\nconst toArray = v => Array.isArray(v) ? v : (v ? [v] : []);\nconst toPgArray = arr => {\n  const clean = toArray(arr).map(x => String(x).trim()).filter(Boolean);\n  if (!clean.length) return '{}';\n  return `{${clean.map(v => `\"${v.replace(/\"/g, '\\\\\"')}\"`).join(',')}}`;\n};\n\nconst userId = webhook.user_id || 'user_default';\nconst prenom = cfg.prenom || null;\nconst email = cfg.email || null;\nconst whatsapp = cfg.whatsapp || null;\nconst secteur = cfg.secteur || null;\n\nconst mots_cles = toPgArray(cfg[\"Mots clés\"] || cfg.mots_cles || []);\nconst concurrents = toPgArray(cfg.concurrents || []);\nconst profiles_linkedin = toPgArray(cfg.profiles_linkedin || []);\nconst sources_veille = toPgArray(cfg.sources_veille || []);\nconst canaux_diffusion = toPgArray(cfg.canaux_diffusion || []);\n\nconst frequence = cfg.frequence || null;\nconst heure_envoi = cfg.heure_envoi || null;\nconst alertes_temps_reel = cfg.alertes_temps_reel === true;\nconst status = cfg.status === 'done' ? 'completed' : 'in_progress';\nconst etapes_validees = toPgArray(cfg.etapes_validees || []);\n\nreturn [{\n  json: {\n    reply: $json.message_utilisateur,\n    user_id: userId,\n    prenom,\n    email,\n    whatsapp,\n    secteur,\n    mots_cles,\n    concurrents,\n    profiles_linkedin,\n    sources_veille,\n    frequence,\n    heure_envoi,\n    canaux_diffusion,\n    alertes_temps_reel,\n    status_onboarding: status,\n    etapes_validees\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 400],
+      "id": "prepare-update",
+      "name": "Préparer Update"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE public.clients SET\n  prenom = {{ $json.prenom ? \"'\" + $json.prenom + \"'\" : \"NULL\" }},\n  email = {{ $json.email ? \"'\" + $json.email + \"'\" : \"NULL\" }},\n  whatsapp = {{ $json.whatsapp ? \"'\" + $json.whatsapp + \"'\" : \"NULL\" }},\n  secteur = {{ $json.secteur ? \"'\" + $json.secteur + \"'\" : \"NULL\" }},\n  mots_cles = '{{ $json.mots_cles }}'::text[],\n  concurrents = '{{ $json.concurrents }}'::text[],\n  profiles_linkedin = '{{ $json.profiles_linkedin }}'::text[],\n  flux_rss_valides = '{{ $json.sources_veille }}'::text[],\n  frequence = {{ $json.frequence ? \"'\" + $json.frequence + \"'\" : \"NULL\" }},\n  heure_envoi = {{ $json.heure_envoi ? \"'\" + $json.heure_envoi + \"'\" : \"NULL\" }},\n  canaux_diffusion = '{{ $json.canaux_diffusion }}'::text[],\n  alertes_temps_reel = {{ $json.alertes_temps_reel }},\n  status_onboarding = '{{ $json.status_onboarding }}',\n  etapes_validees = '{{ $json.etapes_validees }}'::integer[],\n  updated_at = NOW()\nWHERE user_id = '{{ $json.user_id }}'\nRETURNING *",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2000, 400],
+      "id": "update-final",
+      "name": "Update Client Final",
+      "credentials": {
+        "postgres": {
+          "id": "supabase-postgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $('Router').item.json.reply }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [2200, 400],
+      "id": "respond-completed",
+      "name": "Répondre Completed"
+    }
+  ],
+  "connections": {
+    "Webhook - Entrée Utilisateur": {
+      "main": [[{"node": "Search Client in Supabase", "type": "main", "index": 0}]]
+    },
+    "Search Client in Supabase": {
+      "main": [[{"node": "Client existe ?", "type": "main", "index": 0}]]
+    },
+    "Client existe ?": {
+      "main": [
+        [{"node": "Update Timestamp", "type": "main", "index": 0}],
+        [{"node": "Create Client", "type": "main", "index": 0}]
+      ]
+    },
+    "Update Timestamp": {
+      "main": [[{"node": "Normaliser Input", "type": "main", "index": 0}]]
+    },
+    "Create Client": {
+      "main": [[{"node": "Normaliser Input", "type": "main", "index": 0}]]
+    },
+    "Normaliser Input": {
+      "main": [[{"node": "AI Agent", "type": "main", "index": 0}]]
+    },
+    "AI Agent": {
+      "main": [[{"node": "Parser Réponse", "type": "main", "index": 0}]]
+    },
+    "Parser Réponse": {
+      "main": [[{"node": "Router", "type": "main", "index": 0}]]
+    },
+    "Router": {
+      "main": [
+        [{"node": "Répondre Onboarding", "type": "main", "index": 0}],
+        [{"node": "Préparer Update", "type": "main", "index": 0}]
+      ]
+    },
+    "Préparer Update": {
+      "main": [[{"node": "Update Client Final", "type": "main", "index": 0}]]
+    },
+    "Update Client Final": {
+      "main": [[{"node": "Répondre Completed", "type": "main", "index": 0}]]
+    },
+    "xAI Grok": {
+      "ai_languageModel": [[{"node": "AI Agent", "type": "ai_languageModel", "index": 0}]]
+    },
+    "Memory": {
+      "ai_memory": [[{"node": "AI Agent", "type": "ai_memory", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-01-04T16:30:00.000Z",
+  "versionId": "v3-corrected"
+}
