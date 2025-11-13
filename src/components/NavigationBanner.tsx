@@ -1,4 +1,4 @@
-import { Bell, MessageSquare, Sparkles, History, Settings, LogOut, Trash2, LayoutDashboard } from 'lucide-react';
+import { MessageSquare, Sparkles, History, Settings, LogOut, Trash2, LayoutDashboard } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 interface NavigationBannerProps {
@@ -27,9 +27,11 @@ export default function NavigationBanner({
       <div className="max-w-full mx-auto px-4">
         <div className="flex items-center justify-between py-3 gap-4">
           <div className="flex items-center gap-2 cursor-pointer flex-shrink-0" onClick={onNavigateToDashboard}>
-            <div className="bg-gradient-to-br from-orange-500 to-coral-500 p-1.5 rounded-lg">
-              <Bell className="w-4 h-4 text-white" />
-            </div>
+            <img
+              src="/image.png"
+              alt="Veille IA"
+              className="w-8 h-8 rounded-lg"
+            />
             <span className="text-gray-900 font-bold text-lg whitespace-nowrap">VEILLE IA</span>
           </div>
 
