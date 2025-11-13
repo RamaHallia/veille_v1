@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 
 interface AuthContextType {
   user: User | null;
+  userPrenom: string | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signUp: (email: string, password: string) => Promise<{ error: any }>;
@@ -14,17 +15,38 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [userPrenom, setUserPrenom] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const fetchUserPrenom = async (userId: string) => {
+      const { data } = await supabase
+        .from('clients')
+        .select('prenom')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (data?.prenom) {
+        setUserPrenom(data.prenom);
+      }
+    };
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
+      if (session?.user?.id) {
+        fetchUserPrenom(session.user.id);
+      }
       setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       (async () => {
         setUser(session?.user ?? null);
+        if (session?.user?.id) {
+          await fetchUserPrenom(session.user.id);
+        } else {
+          setUserPrenom(null);
+        }
       })();
     });
 
@@ -52,7 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ user, userPrenom, loading, signIn, signUp, signOut }}>
       {children}
     </AuthContext.Provider>
   );

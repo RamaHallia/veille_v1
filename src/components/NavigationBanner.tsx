@@ -1,4 +1,4 @@
-import { Bell, MessageSquare, Sparkles, History, Settings, LogOut, Trash2 } from 'lucide-react';
+import { Bell, MessageSquare, Sparkles, History, Settings, LogOut, Trash2, LayoutDashboard } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 interface NavigationBannerProps {
@@ -20,7 +20,7 @@ export default function NavigationBanner({
   onNavigateToDashboard,
   onClearChatMessages
 }: NavigationBannerProps) {
-  const { user, signOut } = useAuth();
+  const { user, userPrenom, signOut } = useAuth();
 
   return (
     <div className="bg-white border-b border-gray-200">
@@ -34,6 +34,18 @@ export default function NavigationBanner({
           </div>
 
           <nav className="flex items-center gap-1">
+            <button
+              onClick={onNavigateToDashboard}
+              className={`flex items-center gap-2 px-4 py-2 text-sm transition-all ${
+                currentView === 'dashboard'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              Tableau de bord
+            </button>
+
             <button
               onClick={onNavigateToChat}
               className={`flex items-center gap-2 px-4 py-2 text-sm transition-all ${
@@ -94,7 +106,7 @@ export default function NavigationBanner({
                 Effacer les messages
               </button>
             )}
-            <span className="text-sm text-gray-700">{user?.email}</span>
+            <span className="text-sm text-gray-700">{userPrenom || user?.email}</span>
             <button
               onClick={signOut}
               className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-all"
