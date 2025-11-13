@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, startTransition } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Send, LogOut, Bell, Sparkles, LayoutDashboard, Trash2, X, Edit3 } from 'lucide-react';
+import { Send, Sparkles, Trash2, X, Edit3 } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -375,49 +375,6 @@ Pour commencer, donne-moi ton prénom, ton email et ton numéro de téléphone.
   return (
     <div className="flex h-screen bg-gradient-to-br from-orange-50/30 via-peach-50 to-orange-100/40">
       <div className="flex-1 flex flex-col">
-        <div className="bg-white/95 backdrop-blur-sm border-b border-orange-100 px-6 py-4 flex items-center justify-between shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-br from-orange-500 to-coral-500 p-2 rounded-lg">
-              <Bell className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-gray-900 font-bold text-xl">VEILLE IA</span>
-          </div>
-          <div className="flex items-center gap-4">
-            {onNavigateToDashboard && (
-              <button
-                onClick={onNavigateToDashboard}
-                className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-orange-50 rounded-xl transition-all font-medium"
-              >
-                <LayoutDashboard size={16} />
-                Tableau de bord
-              </button>
-            )}
-            <button
-              onClick={clearMessages}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-all font-medium"
-              title="Effacer tous les messages et recommencer la configuration"
-            >
-              <Trash2 size={16} />
-              Effacer les messages
-            </button>
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-gradient-to-br from-orange-500 to-coral-500 rounded-full flex items-center justify-center text-white font-bold">
-                {user?.email?.[0].toUpperCase()}
-              </div>
-              <div className="text-sm font-medium text-gray-900">
-                {user?.email}
-              </div>
-            </div>
-            <button
-              onClick={signOut}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-orange-50 rounded-xl transition-all font-medium"
-            >
-              <LogOut size={16} />
-              Déconnexion
-            </button>
-          </div>
-        </div>
-
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {messages.length === 0 && !isTyping && (
                 <div className="flex flex-col items-center justify-center h-full text-center">

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Send, Bot, User, FileText, Calendar, Sparkles, ArrowLeft, MessageSquarePlus, MessageSquare, Menu, X, Trash2 } from 'lucide-react';
+import { Send, Bot, User, FileText, Calendar, Sparkles, MessageSquarePlus, MessageSquare, Menu, X, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -308,50 +308,18 @@ export default function RAGChatPage({ onBack }: RAGChatPageProps) {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col max-w-6xl mx-auto w-full relative">
-        {/* Header */}
-        <div className="bg-white/95 backdrop-blur-sm border-b border-gray-200 px-6 py-5 shadow-md">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              {/* Bouton pour ouvrir/fermer la sidebar */}
-              {!isSidebarOpen && (
-                <button
-                  onClick={() => setIsSidebarOpen(true)}
-                  className="p-2 hover:bg-orange-50 rounded-xl transition-all hover:scale-105"
-                  title="Afficher les conversations"
-                >
-                  <Menu className="w-5 h-5 text-gray-700" />
-                </button>
-              )}
-              {onBack && (
-                <button
-                  onClick={onBack}
-                  className="p-2 hover:bg-blue-50 rounded-xl transition-all hover:scale-105"
-                  title="Retour"
-                >
-                  <ArrowLeft className="w-5 h-5 text-gray-700" />
-                </button>
-              )}
-              <div className="bg-gradient-to-br from-orange-500 to-coral-500 p-3 rounded-xl shadow-md">
-                <Bot className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                  Assistant IA
-                  <span className="text-xs font-normal bg-orange-100 text-orange-700 px-2 py-1 rounded-full">Beta</span>
-                </h1>
-                <p className="text-sm text-gray-600 font-medium">Interrogez votre historique de veilles</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="bg-gradient-to-br from-orange-500 to-coral-500 w-9 h-9 rounded-full flex items-center justify-center text-white font-bold shadow-md">
-                {user?.email?.[0].toUpperCase()}
-              </div>
-              <div className="text-sm text-gray-700 font-medium">
-                {user?.email}
-              </div>
-            </div>
+        {/* Toggle sidebar button */}
+        {!isSidebarOpen && (
+          <div className="absolute top-4 left-4 z-10">
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="p-3 bg-white hover:bg-orange-50 rounded-xl transition-all shadow-lg"
+              title="Afficher les conversations"
+            >
+              <Menu className="w-5 h-5 text-gray-700" />
+            </button>
           </div>
-        </div>
+        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">

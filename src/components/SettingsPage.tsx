@@ -5,8 +5,6 @@ import { PhoneInput } from 'react-international-phone';
 import 'react-international-phone/style.css';
 import '../styles/phone-input-custom.css';
 import {
-  Bell,
-  LogOut,
   Target,
   Users,
   Clock,
@@ -14,7 +12,6 @@ import {
   Rss,
   Calendar,
   Save,
-  ArrowLeft,
   CheckCircle2,
   X,
   Plus,
@@ -376,43 +373,7 @@ export default function SettingsPage({ onNavigateToDashboard }: SettingsPageProp
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50/30 via-peach-50 to-orange-100/40">
-      {/* Header */}
-      <div className="bg-white/95 backdrop-blur-sm border-b border-orange-100 px-6 py-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="bg-gradient-to-br from-orange-500 to-coral-500 p-2 rounded-lg">
-            <Bell className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-gray-900 font-bold text-xl">VEILLE IA</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={onNavigateToDashboard}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-orange-50 rounded-xl transition-all font-medium"
-          >
-            <ArrowLeft size={16} />
-            Retour au tableau de bord
-          </button>
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-gradient-to-br from-orange-500 to-coral-500 rounded-full flex items-center justify-center text-white font-bold">
-              {user?.email?.[0].toUpperCase()}
-            </div>
-            <div className="text-sm font-medium text-gray-900">
-              {prenom || user?.email}
-            </div>
-          </div>
-          <button
-            onClick={signOut}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-orange-50 rounded-xl transition-all font-medium"
-          >
-            <LogOut size={16} />
-            Déconnexion
-          </button>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="max-w-5xl mx-auto px-6 py-8">
+    <div className="max-w-5xl mx-auto px-6 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Paramètres de veille</h1>
           <p className="text-gray-600">Modifiez votre configuration à tout moment</p>
@@ -922,7 +883,6 @@ export default function SettingsPage({ onNavigateToDashboard }: SettingsPageProp
             </button>
           </div>
         </div>
-      </div>
     </div>
   );
 }
