@@ -16,7 +16,8 @@ import {
   X,
   Plus,
   Mail,
-  MessageCircle
+  MessageCircle,
+  Bell
 } from 'lucide-react';
 
 interface ClientConfig {
