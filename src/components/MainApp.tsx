@@ -6,30 +6,36 @@ import VeilleHistoryPage from './VeilleHistoryPage';
 import RAGChatPage from './RAGChatPage';
 import AutoIndexer from './AutoIndexer';
 import { IndexationStatus } from './IndexationStatus';
+import NavigationBanner from './NavigationBanner';
 import { useAuth } from '../contexts/AuthContext';
 import { Bell, LogOut, Settings, MessageSquare, LayoutDashboard, Bot } from 'lucide-react';
 
-type View = 'chat' | 'dashboard' | 'settings' | 'historique' | 'rag-assistant';
+type View = 'chat' | 'dashboard' | 'settings' | 'historique' | 'rag-assistant' | 'account';
 
 export default function MainApp() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
-  // Key pour forcer le rechargement du Dashboard
   const [dashboardKey, setDashboardKey] = useState(0);
 
   const navigateToDashboard = () => {
-    setDashboardKey(prev => prev + 1); // Force le rechargement
+    setDashboardKey(prev => prev + 1);
     setCurrentView('dashboard');
   };
 
-  // Composant invisible qui vérifie et indexe automatiquement les rapports non indexés
-  // Se lance une seule fois au démarrage de l'application
-  // + Indicateur visuel de progression
+  const handleNavigate = (view: 'dashboard' | 'settings' | 'account') => {
+    if (view === 'dashboard') {
+      navigateToDashboard();
+    } else {
+      setCurrentView(view);
+    }
+  };
+
   return (
-    <>
+    <div className="min-h-screen bg-gray-50">
+      <NavigationBanner currentView={currentView} onNavigate={handleNavigate} />
       <AutoIndexer />
       <IndexationStatus />
       {renderView()}
-    </>
+    </div>
   );
 
   function renderView() {
@@ -61,6 +67,17 @@ export default function MainApp() {
 
     if (currentView === 'rag-assistant') {
       return <RAGChatPage onBack={navigateToDashboard} />;
+    }
+
+    if (currentView === 'account') {
+      return (
+        <div className="max-w-4xl mx-auto px-6 py-8">
+          <h1 className="text-3xl font-bold text-gray-900 mb-6">Mon Compte</h1>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <p className="text-gray-600">Page compte en construction...</p>
+          </div>
+        </div>
+      );
     }
 
     return <ChatInterface onNavigateToDashboard={navigateToDashboard} />;

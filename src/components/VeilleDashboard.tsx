@@ -207,7 +207,7 @@ export default function VeilleDashboard({ onNavigateToChat, onNavigateToSettings
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-orange-50/30 via-peach-50 to-orange-100/40">
+      <div className="flex h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500"></div>
           <p className="text-gray-600">Chargement...</p>
@@ -218,7 +218,7 @@ export default function VeilleDashboard({ onNavigateToChat, onNavigateToSettings
 
   if (!config) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-orange-50/30 via-peach-50 to-orange-100/40">
+      <div className="flex h-screen items-center justify-center">
         <div className="text-center max-w-md">
           <div className="bg-gradient-to-br from-orange-500 to-coral-500 p-4 rounded-2xl mb-4 inline-block">
             <Sparkles className="w-8 h-8 text-white" />
@@ -238,68 +238,7 @@ export default function VeilleDashboard({ onNavigateToChat, onNavigateToSettings
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50/30 via-peach-50 to-orange-100/40">
-      {/* Header */}
-      <div className="bg-white/95 backdrop-blur-sm border-b border-orange-100 px-6 py-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="bg-gradient-to-br from-orange-500 to-coral-500 p-2 rounded-lg">
-            <Bell className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-gray-900 font-bold text-xl">VEILLE IA</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={onNavigateToChat}
-            className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl transition-all font-medium border border-blue-200"
-            title="Modifier votre configuration via chat"
-          >
-            <MessageSquare size={16} />
-            Modifier ma configuration
-          </button>
-          {onNavigateToRAGAssistant && (
-            <button
-              onClick={onNavigateToRAGAssistant}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-gradient-to-r from-orange-500 to-coral-500 text-white hover:shadow-lg rounded-xl transition-all font-medium"
-              title="Interrogez votre historique de veilles avec l'IA"
-            >
-              <Sparkles size={16} />
-              Assistant IA
-            </button>
-          )}
-          <button
-            onClick={onNavigateToHistorique}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-orange-50 rounded-xl transition-all font-medium"
-          >
-            <History size={16} />
-            Historique
-          </button>
-          <button
-            onClick={onNavigateToSettings}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-orange-50 rounded-xl transition-all font-medium"
-          >
-            <Settings size={16} />
-            Paramètres
-          </button>
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-gradient-to-br from-orange-500 to-coral-500 rounded-full flex items-center justify-center text-white font-bold">
-              {user?.email?.[0].toUpperCase()}
-            </div>
-            <div className="text-sm font-medium text-gray-900">
-              {config.prenom || user?.email}
-            </div>
-          </div>
-          <button
-            onClick={signOut}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-orange-50 rounded-xl transition-all font-medium"
-          >
-            <LogOut size={16} />
-            Déconnexion
-          </button>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
+    <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Status Banner */}
         <div className="mb-8 flex items-center justify-between">
           <div>
@@ -660,7 +599,6 @@ export default function VeilleDashboard({ onNavigateToChat, onNavigateToSettings
             </div>
           </div>
         )}
-      </div>
     </div>
   );
 }
