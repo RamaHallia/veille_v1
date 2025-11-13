@@ -13,10 +13,17 @@ type View = 'chat' | 'dashboard' | 'settings' | 'historique' | 'rag-assistant';
 export default function MainApp() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [dashboardKey, setDashboardKey] = useState(0);
+  const [clearChatMessagesFn, setClearChatMessagesFn] = useState<(() => void) | null>(null);
 
   const navigateToDashboard = () => {
     setDashboardKey(prev => prev + 1);
     setCurrentView('dashboard');
+  };
+
+  const handleClearChatMessages = () => {
+    if (clearChatMessagesFn) {
+      clearChatMessagesFn();
+    }
   };
 
   return (
@@ -28,6 +35,7 @@ export default function MainApp() {
         onNavigateToRAGAssistant={() => setCurrentView('rag-assistant')}
         onNavigateToHistorique={() => setCurrentView('historique')}
         onNavigateToSettings={() => setCurrentView('settings')}
+        onClearChatMessages={handleClearChatMessages}
       />
       <AutoIndexer />
       <IndexationStatus />
@@ -60,7 +68,12 @@ export default function MainApp() {
       return <RAGChatPage onBack={navigateToDashboard} />;
     }
 
-    return <ChatInterface onNavigateToDashboard={navigateToDashboard} />;
+    return (
+      <ChatInterface
+        onNavigateToDashboard={navigateToDashboard}
+        onClearMessages={(clearFn) => setClearChatMessagesFn(() => clearFn)}
+      />
+    );
   }
 }
 

@@ -1,4 +1,4 @@
-import { Bell, MessageSquare, Sparkles, History, Settings, LogOut } from 'lucide-react';
+import { Bell, MessageSquare, Sparkles, History, Settings, LogOut, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 interface NavigationBannerProps {
@@ -8,6 +8,7 @@ interface NavigationBannerProps {
   onNavigateToHistorique: () => void;
   onNavigateToSettings: () => void;
   onNavigateToDashboard: () => void;
+  onClearChatMessages?: () => void;
 }
 
 export default function NavigationBanner({
@@ -16,7 +17,8 @@ export default function NavigationBanner({
   onNavigateToRAGAssistant,
   onNavigateToHistorique,
   onNavigateToSettings,
-  onNavigateToDashboard
+  onNavigateToDashboard,
+  onClearChatMessages
 }: NavigationBannerProps) {
   const { user, signOut } = useAuth();
 
@@ -82,6 +84,16 @@ export default function NavigationBanner({
           </nav>
 
           <div className="flex items-center gap-4">
+            {currentView === 'chat' && onClearChatMessages && (
+              <button
+                onClick={onClearChatMessages}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition-all"
+                title="Effacer tous les messages et recommencer la configuration"
+              >
+                <Trash2 className="w-4 h-4" />
+                Effacer les messages
+              </button>
+            )}
             <span className="text-sm text-gray-700">{user?.email}</span>
             <button
               onClick={signOut}

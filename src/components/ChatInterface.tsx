@@ -21,9 +21,10 @@ interface Suggestion {
 
 interface ChatInterfaceProps {
   onNavigateToDashboard?: () => void;
+  onClearMessages?: (clearFn: () => void) => void;
 }
 
-export default function ChatInterface({ onNavigateToDashboard }: ChatInterfaceProps) {
+export default function ChatInterface({ onNavigateToDashboard, onClearMessages }: ChatInterfaceProps) {
   const { user, signOut } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -35,6 +36,40 @@ export default function ChatInterface({ onNavigateToDashboard }: ChatInterfacePr
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isLastStep, setIsLastStep] = useState(false);
   const [showTooltip, setShowTooltip] = useState(true);
+
+  const clearMessages = () => {
+    const confirmClear = window.confirm(
+      'Êtes-vous sûr de vouloir recommencer la configuration depuis le début ?'
+    );
+
+    if (!confirmClear) return;
+
+    // Effacer les messages localement et afficher le message de bienvenue
+    const welcomeMessage: Message = {
+      id: 'welcome-' + Date.now(),
+      role: 'assistant',
+      content: `Salut ! 😊
+
+Je vais t'aider à configurer ta veille concurrentielle.
+
+Pour commencer, donne-moi ton prénom, ton email et ton numéro de téléphone.
+(tu peux tout envoyer d'un coup ou séparément)`,
+      created_at: new Date().toISOString(),
+    };
+    setMessages([welcomeMessage]);
+    setSuggestions([]);
+    setTypingMessage('');
+    setIsTyping(false);
+    setIsLastStep(false);
+
+    console.log('✅ Configuration redémarrée');
+  };
+
+  useEffect(() => {
+    if (onClearMessages) {
+      onClearMessages(clearMessages);
+    }
+  }, [onClearMessages]);
 
   useEffect(() => {
     // Afficher le message de bienvenue au démarrage (en local uniquement)
@@ -142,34 +177,6 @@ Pour commencer, donne-moi ton prénom, ton email et ton numéro de téléphone.
     // sendMessage();
   };
 
-  const clearMessages = () => {
-    const confirmClear = window.confirm(
-      'Êtes-vous sûr de vouloir recommencer la configuration depuis le début ?'
-    );
-
-    if (!confirmClear) return;
-
-    // Effacer les messages localement et afficher le message de bienvenue
-    const welcomeMessage: Message = {
-      id: 'welcome-' + Date.now(),
-      role: 'assistant',
-      content: `Salut ! 😊
-
-Je vais t'aider à configurer ta veille concurrentielle.
-
-Pour commencer, donne-moi ton prénom, ton email et ton numéro de téléphone.
-(tu peux tout envoyer d'un coup ou séparément)`,
-      created_at: new Date().toISOString(),
-    };
-
-    setMessages([welcomeMessage]);
-    setSuggestions([]);
-    setTypingMessage('');
-    setIsTyping(false);
-    setIsLastStep(false);
-
-    console.log('✅ Configuration redémarrée');
-  };
 
   const sendMessage = async () => {
     if (!inputMessage.trim() || isLoading) return;
