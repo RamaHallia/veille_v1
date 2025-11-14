@@ -69,7 +69,7 @@ Pour commencer, donne-moi ton prénom, ton email et ton numéro de téléphone.
     if (onClearMessages) {
       onClearMessages(clearMessages);
     }
-  }, [onClearMessages]);
+  }, []);
 
   useEffect(() => {
     // Afficher le message de bienvenue au démarrage (en local uniquement)
